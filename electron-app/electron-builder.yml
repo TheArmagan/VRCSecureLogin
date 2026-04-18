@@ -27,7 +27,15 @@ mac:
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
   notarize: false
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Utility
+  executableName: vrcsecurelogin
 appImage:
+  artifactName: ${name}-${version}.${ext}
+deb:
   artifactName: ${name}-${version}.${ext}
 npmRebuild: false
 publish:

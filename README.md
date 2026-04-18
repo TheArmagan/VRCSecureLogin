@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="images/icon.png" alt="VRCSecureLogin" width="128" />
+</p>
+
 # VRCSecureLogin
 
 A secure local credential vault and API proxy for VRChat accounts.

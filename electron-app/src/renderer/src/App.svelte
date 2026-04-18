@@ -7,6 +7,7 @@
   import SettingsPanel from "$lib/components/SettingsPanel.svelte";
   import ConsentDialog from "$lib/components/ConsentDialog.svelte";
   import DeeplinkConfirmDialog from "$lib/components/DeeplinkConfirmDialog.svelte";
+  import UserKey from "@lucide/svelte/icons/user-key";
   import Shield from "@lucide/svelte/icons/shield";
   import Users from "@lucide/svelte/icons/users";
   import AppWindow from "@lucide/svelte/icons/app-window";
@@ -39,7 +40,7 @@
   >
     <!-- Left: branding -->
     <div class="flex items-center gap-2.5 px-4">
-      <Shield class="h-4 w-4 text-primary" />
+      <UserKey class="h-4 w-4 text-primary" />
       <span
         class="text-xs font-semibold tracking-wide text-muted-foreground uppercase"
       >
