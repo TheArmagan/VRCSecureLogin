@@ -2,7 +2,6 @@
   import AccountCard from "./AccountCard.svelte";
   import AddAccountDialog from "./AddAccountDialog.svelte";
   import * as AlertDialog from "$lib/components/ui/alert-dialog";
-  import { Button } from "$lib/components/ui/button";
   import { Skeleton } from "$lib/components/ui/skeleton";
   import {
     getAccounts,
