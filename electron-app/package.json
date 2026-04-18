@@ -6,6 +6,7 @@
     "name": "Kıraç Armağan Önal",
     "email": "kiracarmaganonal@gmail.com"
   },
+  "homepage": "https://github.com/TheArmagan/VRCSecureLogin",
   "scripts": {
     "format": "prettier --plugin prettier-plugin-svelte --write .",
     "lint": "eslint --cache .",
