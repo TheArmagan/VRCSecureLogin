@@ -1,14 +1,26 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, BrowserWindow, Tray, Menu, nativeImage, dialog } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import { registerIpcHandlers, loadAndApplySettings } from './lib/ipc-handlers'
+import { apiServer } from './lib/api-server'
+import { accountManager } from './lib/account-manager'
+import { pipelineManager } from './lib/pipeline-manager'
+import { registerProtocol, handleDeepLink, setDeepLinkDeps, registerDeepLinkIpc } from './lib/deeplink-handler'
+import { startAutoUpdater, stopAutoUpdater, setUpdateCallback } from './lib/auto-updater'
 
-function createWindow(): void {
-  // Create the browser window.
-  const mainWindow = new BrowserWindow({
-    width: 900,
-    height: 550,
+let mainWindow: BrowserWindow | null = null
+let tray: Tray | null = null
+let isQuitting = false
+
+function createWindow(): BrowserWindow {
+  const win = new BrowserWindow({
+    width: 960,
+    height: 640,
+    minWidth: 800,
+    minHeight: 500,
     show: false,
+    frame: false,
     autoHideMenuBar: true,
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
@@ -17,58 +29,185 @@ function createWindow(): void {
     }
   })
 
-  mainWindow.on('ready-to-show', () => {
-    mainWindow.show()
+  win.on('ready-to-show', () => {
+    win.show()
   })
 
-  mainWindow.webContents.setWindowOpenHandler((details) => {
+  // Minimize to tray instead of closing
+  win.on('close', (e) => {
+    if (!isQuitting) {
+      e.preventDefault()
+      win.hide()
+    }
+  })
+
+  win.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }
   })
 
-  // HMR for renderer base on electron-vite cli.
-  // Load the remote URL for development or the local html file for production.
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+    win.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    win.loadFile(join(__dirname, '../renderer/index.html'))
   }
+
+  return win
 }
 
-// This method will be called when Electron has finished
-// initialization and is ready to create browser windows.
-// Some APIs can only be used after this event occurs.
-app.whenReady().then(() => {
-  // Set app user model id for windows
-  electronApp.setAppUserModelId('rest.armagan.vrcsecurelogin')
+function createTray(): void {
+  const trayIcon = nativeImage.createFromPath(icon).resize({ width: 16, height: 16 })
+  tray = new Tray(trayIcon)
+  tray.setToolTip('VRCSecureLogin')
 
-  // Default open or close DevTools by F12 in development
-  // and ignore CommandOrControl + R in production.
-  // see https://github.com/alex8088/electron-toolkit/tree/master/packages/utils
-  app.on('browser-window-created', (_, window) => {
-    optimizer.watchWindowShortcuts(window)
+  updateTrayMenu()
+
+  tray.on('double-click', () => {
+    mainWindow?.show()
+    mainWindow?.focus()
+  })
+}
+
+async function updateTrayMenu(): Promise<void> {
+  if (!tray) return
+
+  const accounts = await accountManager.getAccounts()
+  const accountItems: Electron.MenuItemConstructorOptions[] = accounts.map((a) => ({
+    label: `${a.displayName} (${a.status})`,
+    enabled: false
+  }))
+
+  const contextMenu = Menu.buildFromTemplate([
+    {
+      label: 'Open Dashboard',
+      click: () => {
+        mainWindow?.show()
+        mainWindow?.focus()
+      }
+    },
+    { type: 'separator' },
+    { label: 'Accounts', enabled: false },
+    ...accountItems,
+    { type: 'separator' },
+    {
+      label: 'Quit',
+      click: () => {
+        isQuitting = true
+        app.quit()
+      }
+    }
+  ])
+
+  tray.setContextMenu(contextMenu)
+}
+
+// Ensure single instance
+const gotTheLock = app.requestSingleInstanceLock()
+if (!gotTheLock) {
+  app.quit()
+} else {
+  app.on('second-instance', (_event, commandLine) => {
+    // Handle deep link from second instance
+    const deepLinkUrl = commandLine.find((arg) => arg.startsWith('vrcsl://'))
+    if (deepLinkUrl) {
+      handleDeepLink(deepLinkUrl)
+    }
+
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.show()
+      mainWindow.focus()
+    }
   })
 
-  // IPC test
-  ipcMain.on('ping', () => console.log('pong'))
+  // Register deep link protocol
+  registerProtocol()
 
-  createWindow()
+  app.whenReady().then(async () => {
+    electronApp.setAppUserModelId('rest.armagan.vrcsecurelogin')
 
-  app.on('activate', function () {
-    // On macOS it's common to re-create a window in the app when the
-    // dock icon is clicked and there are no other windows open.
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    app.on('browser-window-created', (_, window) => {
+      optimizer.watchWindowShortcuts(window)
+    })
+
+    // Create main window
+    mainWindow = createWindow()
+
+    // Register IPC handlers
+    registerIpcHandlers(mainWindow)
+    registerDeepLinkIpc()
+
+    // Load settings and apply
+    const settings = await loadAndApplySettings()
+
+    // Set up deep link handler dependencies
+    setDeepLinkDeps({
+      mainWindow
+    })
+
+    // Set up auto-updater
+    setUpdateCallback((version) => {
+      mainWindow?.webContents.send('vrcsl:updateAvailable', version)
+    })
+    startAutoUpdater(settings)
+
+    // Start API server
+    try {
+      await apiServer.start()
+      console.log('[VRCSL] API server started')
+    } catch (err) {
+      console.error('[VRCSL] Failed to start API server:', err)
+      dialog.showErrorBox(
+        'VRCSecureLogin',
+        `Failed to start API server on port ${settings.apiPort}. Is another instance running?`
+      )
+    }
+
+    // Start account session keep-alive
+    accountManager.startKeepAlive()
+
+    // Start pipeline connections
+    await pipelineManager.startAll()
+
+    // Create system tray
+    createTray()
+
+    // Update tray when accounts change
+    accountManager.on('account-online', () => updateTrayMenu())
+    accountManager.on('account-offline', () => updateTrayMenu())
+    accountManager.on('account-removed', () => updateTrayMenu())
+    accountManager.on('session-refreshed', () => updateTrayMenu())
+
+    // Handle deep link on startup (Windows)
+    const deepLinkUrl = process.argv.find((arg) => arg.startsWith('vrcsl://'))
+    if (deepLinkUrl) {
+      handleDeepLink(deepLinkUrl)
+    }
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        mainWindow = createWindow()
+      }
+    })
+
+    // Handle open-url for deep links (Linux)
+    app.on('open-url', (_event, url) => {
+      handleDeepLink(url)
+    })
   })
-})
 
-// Quit when all windows are closed, except on macOS. There, it's common
-// for applications and their menu bar to stay active until the user quits
-// explicitly with Cmd + Q.
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit()
-  }
-})
+  app.on('before-quit', () => {
+    isQuitting = true
+  })
 
-// In this file you can include the rest of your app's specific main process
-// code. You can also put them in separate files and require them here.
+  app.on('will-quit', () => {
+    stopAutoUpdater()
+    accountManager.stopKeepAlive()
+    pipelineManager.stopAll()
+    apiServer.stop()
+  })
+
+  app.on('window-all-closed', () => {
+    // Don't quit — tray keeps running
+  })
+}

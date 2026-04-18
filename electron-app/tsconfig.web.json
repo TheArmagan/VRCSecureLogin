@@ -12,6 +12,19 @@
     "strict": false,
     "allowJs": true,
     "checkJs": true,
-    "lib": ["ESNext", "DOM", "DOM.Iterable"]
+    "lib": [
+      "ESNext",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "skipLibCheck": true,
+    "paths": {
+      "$lib": [
+        "./src/renderer/src/lib"
+      ],
+      "$lib/*": [
+        "./src/renderer/src/lib/*"
+      ]
+    }
   }
 }

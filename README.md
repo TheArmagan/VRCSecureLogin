@@ -1,6 +1,8 @@
 # VRCSecureLogin
 
-**A secure local credential vault and API proxy for VRChat accounts.**
+A secure local credential vault and API proxy for VRChat accounts.
+
+---
 
 VRCSecureLogin (VRCSL) eliminates the need to hand over your VRChat username and password to every third-party application or website. It stores your credentials securely on your machine, keeps your sessions alive, and lets third-party tools access VRChat on your behalf through a scoped, consent-driven local API.
 
@@ -22,19 +24,25 @@ VRCSecureLogin (VRCSL) eliminates the need to hand over your VRChat username and
 - [Scope System](#scope-system)
 - [Security](#security)
 - [For Developers (Third-Party Integration)](#for-developers-third-party-integration)
+  - [Client SDK (vrcsl.js)](#client-sdk-vrcsl.js)
+  - [Raw HTTP API](#raw-http-api)
+  - [Raw WebSocket API](#raw-websocket-api)
 - [Technology Stack](#technology-stack)
+- [Project Structure](#project-structure)
 - [License](#license)
 
 ---
 
 ## The Problem
 
-VRChat does not offer a standard OAuth 2.0 system. Every third-party application or website that requires VRChat authentication must emulate VRChat's proprietary login flow, which means users are forced to enter their raw credentials (username, password, and 2FA codes) directly into each service. This leads to:
+VRChat does not offer a standard OAuth 2.0 system. Every third-party application or website that requires VRChat authentication must emulate VRChat's proprietary login flow, which means users are forced to enter their raw credentials (username, password, and 2FA codes) directly into each service. This creates several issues:
 
 - Plaintext credential exposure to every application that requests login.
 - No way to limit what an application can do with your account.
 - No way to revoke a single application's access without changing your password.
 - Repeated login prompts because each application manages its own session.
+
+---
 
 ## How It Works
 
@@ -44,6 +52,8 @@ VRChat does not offer a standard OAuth 2.0 system. Every third-party application
 4. VRCSL shows you a consent dialog detailing exactly what the application is requesting and which accounts it wants access to. You choose what to allow.
 5. The application receives a scoped, time-limited token. It can only perform the actions you approved, on the accounts you selected.
 6. You can review, modify, or revoke any application's access at any time from the VRCSL dashboard.
+
+---
 
 ## Features
 
@@ -61,6 +71,8 @@ VRChat does not offer a standard OAuth 2.0 system. Every third-party application
 - **System tray integration** to keep running in the background.
 - **Auto-update** from GitHub Releases with SHA-256 integrity verification.
 
+---
+
 ## Supported Platforms
 
 | Platform | Status |
@@ -74,8 +86,10 @@ VRChat does not offer a standard OAuth 2.0 system. Every third-party application
 
 Download the latest release from the [Releases](../../releases) page. Choose the appropriate installer for your platform:
 
-- **Windows**: `.exe` installer
-- **Linux**: `.AppImage` or `.deb` package
+- **Windows** -- `.exe` installer
+- **Linux** -- `.AppImage` or `.deb` package
+
+---
 
 ## Development
 
@@ -173,8 +187,8 @@ All DeepLinks accept an optional `accountIdx` parameter. If omitted and the user
 
 VRCSL provides a real-time event pipeline that combines two sources:
 
-- **VRChat pipeline events**: Forwarded from VRChat's own WebSocket pipeline (`friend-online`, `friend-offline`, `friend-location`, `user-update`, `notification`, etc.).
-- **VRCSL internal events**: Session and account lifecycle events (`session-refreshed`, `session-expired`, `account-online`, `account-offline`, `token-revoked`).
+- **VRChat pipeline events** -- Forwarded from VRChat's own WebSocket pipeline (`friend-online`, `friend-offline`, `friend-location`, `user-update`, `notification`, etc.).
+- **VRCSL internal events** -- Session and account lifecycle events (`session-refreshed`, `session-expired`, `account-online`, `account-offline`, `token-revoked`).
 
 ### Delivery Methods
 
@@ -222,17 +236,34 @@ Permissions follow a hierarchical dot notation: `vrchat.<category>.<action>`. Wi
 | Scope | Description |
 |-------|-------------|
 | `vrchat.users.get` | Read user profiles. |
+| `vrchat.users.search` | Search users. |
 | `vrchat.friends.list` | List friends. |
+| `vrchat.friends.status` | Read friend online status. |
+| `vrchat.avatars.get` | Read avatar details. |
 | `vrchat.avatars.select` | Switch avatar. |
+| `vrchat.avatars.list` | List owned avatars. |
 | `vrchat.avatars.*` | All avatar operations. |
 | `vrchat.worlds.get` | Read world info. |
+| `vrchat.worlds.list` | List worlds. |
+| `vrchat.instances.get` | Read instance info. |
 | `vrchat.instances.create` | Create instances. |
 | `vrchat.invites.send` | Send invites. |
+| `vrchat.invites.list` | List invites. |
+| `vrchat.favorites.*` | All favorite operations. |
 | `vrchat.groups.*` | All group operations. |
 | `vrchat.notifications.*` | All notification operations. |
+| `vrchat.playermod.*` | All player moderation operations. |
+| `vrchat.files.*` | All file operations. |
 | `vrchat.pipeline.*` | All real-time pipeline events (VRChat). |
 | `vrchat.pipeline.friend-online` | Friend online events only. |
+| `vrchat.pipeline.friend-offline` | Friend offline events only. |
+| `vrchat.pipeline.friend-location` | Friend location change events. |
+| `vrchat.pipeline.user-update` | User profile update events. |
+| `vrchat.pipeline.notification` | Notification events. |
 | `vrcsl.events.*` | All VRCSL internal events (session, account, token). |
+| `vrcsl.events.session` | Session lifecycle events only. |
+| `vrcsl.events.account` | Account lifecycle events only. |
+| `vrcsl.events.token` | Token lifecycle events only. |
 | `vrchat.*` | Full unrestricted access (triggers a warning in the consent dialog). |
 
 For the complete scope-to-endpoint mapping, see the [Project Design Record](pdr/VRCSECURELOGIN_V1_PDR.md).
@@ -260,15 +291,77 @@ VRCSL is designed with the assumption that other processes on the local machine 
 
 ## For Developers (Third-Party Integration)
 
-To integrate your application or website with VRCSL:
+There are two ways to integrate with VRCSL: using the official client SDK or communicating directly with the raw API.
 
-1. Send a `POST /register` request (HTTP) or a `register` message (WebSocket) with your application name, description, and desired scopes.
-2. VRCSL displays a consent dialog to the user. If approved, you receive an access token, a refresh token, and the list of granted scopes and accounts.
-3. Use the access token in the `Authorization: Bearer` header to proxy VRChat API requests through `POST /api`.
-4. To receive real-time events, subscribe via WebSocket (`subscribe` message) or connect to `GET /events` (SSE). Include pipeline scopes in your registration request.
-5. When the access token expires, use `POST /refresh` with your refresh token to obtain new tokens.
+### Client SDK (vrcsl.js)
 
-### Quick Example (HTTP)
+The recommended integration method. `vrcsl.js` is the official JavaScript/TypeScript client SDK that handles transport selection, token lifecycle, event streaming, and error recovery automatically. It works in browsers, Node.js 18+, and Bun 1.0+.
+
+**Install:**
+
+```bash
+npm install vrcsl.js
+```
+
+**Register and make API calls:**
+
+```typescript
+import { VRCSLClient, Scopes } from "vrcsl.js";
+
+const client = new VRCSLClient({
+  appName: "My VRChat Tool",
+  appDescription: "Manages avatars across accounts",
+  scopes: [Scopes.AVATARS_ALL, Scopes.USERS_GET],
+});
+
+// Connect (attempts WebSocket first, falls back to HTTP).
+await client.connect();
+
+// Register triggers the consent dialog on the user's machine.
+const result = await client.register();
+console.log("Granted accounts:", result.grantedAccounts);
+
+// Proxy VRChat API requests through VRCSL.
+const avatar = await client.api("usr_xxx", "GET", "/avatars/avtr_yyy");
+console.log(avatar.data);
+```
+
+**Subscribe to real-time events:**
+
+```typescript
+await client.subscribe(["usr_xxx"], ["friend-online", "friend-offline"]);
+
+client.on("friend-online", (event) => {
+  console.log(event.data.user.displayName, "came online");
+});
+```
+
+**Browser (script tag):**
+
+```html
+<script src="https://unpkg.com/vrcsl.js/dist/index.global.js"></script>
+<script>
+  const client = new VRCSL.Client({
+    appName: "My Web Tool",
+    scopes: [VRCSL.Scopes.AVATARS_ALL],
+  });
+
+  async function init() {
+    await client.connect();
+    await client.register();
+    const accounts = await client.getAccounts();
+    console.log(accounts);
+  }
+
+  init();
+</script>
+```
+
+For the full SDK documentation, see the [vrcsl.js README](vrcsl.js/README.md).
+
+### Raw HTTP API
+
+For languages and environments without SDK support, you can communicate directly with the VRCSL HTTP API.
 
 **Register:**
 
@@ -295,7 +388,66 @@ curl -X POST http://127.0.0.1:7642/api \
   }'
 ```
 
-For detailed API documentation, message formats, error codes, and WebSocket protocol specification, see the [Project Design Record](pdr/VRCSECURELOGIN_V1_PDR.md).
+**Refresh an expired token:**
+
+```bash
+curl -X POST http://127.0.0.1:7642/refresh \
+  -H "Content-Type: application/json" \
+  -d '{
+    "refreshToken": "vrcsl_rt_..."
+  }'
+```
+
+**Subscribe to events (SSE):**
+
+```
+GET /events?accountIds=usr_xxx&events=friend-online,friend-offline
+Authorization: Bearer vrcsl_at_...
+Accept: text/event-stream
+```
+
+### Raw WebSocket API
+
+Connect to `ws://127.0.0.1:7642/ws` and communicate using JSON messages.
+
+**Authenticate:**
+
+```json
+{
+  "requestId": "auth-1",
+  "type": "auth",
+  "body": { "token": "vrcsl_at_..." }
+}
+```
+
+**Make an API request:**
+
+```json
+{
+  "requestId": "req-1",
+  "type": "api_request",
+  "userId": "usr_xxx",
+  "body": {
+    "method": "GET",
+    "path": "/avatars/avtr_xxx"
+  }
+}
+```
+
+**Subscribe to events:**
+
+```json
+{
+  "requestId": "sub-1",
+  "type": "subscribe",
+  "body": {
+    "accountIds": ["usr_xxx"],
+    "events": ["friend-online", "friend-offline"]
+  }
+}
+```
+
+For detailed message formats, error codes, and protocol specification, see the [Project Design Record](pdr/VRCSECURELOGIN_V1_PDR.md).
 
 ---
 
@@ -311,7 +463,31 @@ For detailed API documentation, message formats, error codes, and WebSocket prot
 | Credential storage | OS keychain via `keytar` |
 | Data storage | AES-256-GCM encrypted JSON |
 | Local server | Node.js `http` + `ws` |
+| Client SDK | `vrcsl.js` (TypeScript, ESM/CJS/UMD) |
 | Packaging | electron-builder |
+
+---
+
+## Project Structure
+
+```
+VRCSecureLogin/
+├── electron-app/             # Main Electron application
+│   ├── src/
+│   │   ├── main/             # Main process (API server, session management, IPC)
+│   │   ├── preload/          # Preload scripts for renderer isolation
+│   │   └── renderer/         # Svelte frontend (account management, consent dialogs)
+│   ├── build/                # Build resources (entitlements, icons)
+│   └── resources/            # Static application resources
+├── vrcsl.js/                 # Official client SDK for third-party integration
+│   ├── src/                  # SDK source (client, transports, token store, deeplinks)
+│   └── tests/                # SDK test suite
+├── pdr/                      # Project Design Records
+│   ├── VRCSECURELOGIN_V1_PDR.md
+│   └── VRCSLJS_PDR.md
+├── LICENSE
+└── README.md
+```
 
 ---
 
