@@ -107,9 +107,11 @@ export class WSTransport implements Transport, EventTransport {
         reject(new VRCSLError("connection_failed", "WebSocket connection failed"));
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event: CloseEvent) => {
         clearTimeout(timeout);
-        this.cleanup();
+        const code = event.code;
+        const reason = event.reason || 'Unknown reason';
+        this.cleanup(code, reason);
         if (!this.closed) {
           this.onDisconnect?.();
         }
@@ -126,7 +128,7 @@ export class WSTransport implements Transport, EventTransport {
     this.onDisconnect = handler;
   }
 
-  private async authenticate(token: string): Promise<void> {
+  async authenticate(token: string): Promise<void> {
     const result = await this.send<{ success: boolean }>("auth", { token });
     if (!result.success) {
       throw new VRCSLError("invalid_token", "WebSocket authentication failed", 401);
@@ -218,7 +220,7 @@ export class WSTransport implements Transport, EventTransport {
     }, 30_000);
   }
 
-  private cleanup(): void {
+  private cleanup(code?: number, reason?: string): void {
     if (this.pingInterval) {
       clearInterval(this.pingInterval);
       this.pingInterval = null;
@@ -228,9 +230,12 @@ export class WSTransport implements Transport, EventTransport {
       this.pongTimeout = null;
     }
     // Reject all pending requests
+    const errorMessage = code
+      ? `WebSocket closed (code: ${code}, reason: ${reason ?? 'none'})`
+      : 'WebSocket closed';
     for (const [, pending] of this.pending) {
       clearTimeout(pending.timeout);
-      pending.reject(new VRCSLError("ws_closed", "WebSocket closed unexpectedly"));
+      pending.reject(new VRCSLError("ws_closed", errorMessage));
     }
     this.pending.clear();
     this.ws = null;
@@ -241,11 +246,25 @@ export class WSTransport implements Transport, EventTransport {
     this.closed = true;
     this.onEvent = null;
     this.lastSubscription = null;
+    // Clear pending before closing so they get a clear error
+    for (const [, pending] of this.pending) {
+      clearTimeout(pending.timeout);
+      pending.reject(new VRCSLError("ws_closed", "WebSocket closed by client"));
+    }
+    this.pending.clear();
     if (this.ws) {
       this.ws.onclose = null;
       this.ws.close();
     }
-    this.cleanup();
+    if (this.pingInterval) {
+      clearInterval(this.pingInterval);
+      this.pingInterval = null;
+    }
+    if (this.pongTimeout) {
+      clearTimeout(this.pongTimeout);
+      this.pongTimeout = null;
+    }
+    this.ws = null;
   }
 
   get isConnected(): boolean {

@@ -97,6 +97,11 @@ describe("VRCSLClient", () => {
       tokenStore: false,
     });
 
+    // Mock successful accounts response for token validation during connect
+    globalThis.fetch = mock(async () =>
+      new Response(JSON.stringify({ accounts: [] }), { status: 200 })
+    ) as unknown as typeof fetch;
+
     await client.connect();
     expect(client.isAuthenticated).toBe(true);
   });
@@ -160,7 +165,7 @@ describe("VRCSLClient", () => {
       const url = typeof _url === "string" ? _url : "";
       callCount++;
 
-      // First API call → 401
+      // Validation call during connect → 401
       if (callCount === 1) {
         return new Response(
           JSON.stringify({ error: "invalid_token", message: "Token expired" }),
@@ -168,7 +173,7 @@ describe("VRCSLClient", () => {
         );
       }
 
-      // Refresh call
+      // Refresh call (during connect validation or auto-refresh)
       if (url.includes("/refresh")) {
         return new Response(
           JSON.stringify({
@@ -180,7 +185,7 @@ describe("VRCSLClient", () => {
         );
       }
 
-      // Retry API call
+      // Any other call (accounts validation after refresh, API calls)
       return new Response(
         JSON.stringify({ status: 200, data: { success: true } }),
         { status: 200 }
@@ -196,12 +201,21 @@ describe("VRCSLClient", () => {
     });
 
     await client.connect();
+    // connect: 1 (accounts → 401) + 2 (refresh → ok) = 2 calls
+    expect(client.isAuthenticated).toBe(true);
+
     const result = await client.api("usr_xxx", "GET", "/test");
     expect(result.data).toEqual({ success: true });
-    expect(callCount).toBe(3); // 401 + refresh + retry
+    // + 3 (api call → ok) = 3 total
+    expect(callCount).toBe(3);
   });
 
   test("refresh emits token_expired when refresh fails", async () => {
+    // Mock successful accounts response for connect validation
+    globalThis.fetch = mock(async () =>
+      new Response(JSON.stringify({ accounts: [] }), { status: 200 })
+    ) as unknown as typeof fetch;
+
     const client = new VRCSLClient({
       appName: "Test",
       transport: "http",
@@ -210,14 +224,15 @@ describe("VRCSLClient", () => {
       tokenStore: false,
     });
 
+    await client.connect();
+
+    // Now mock all requests to return 401
     globalThis.fetch = mock(async () =>
       new Response(
         JSON.stringify({ error: "invalid_token", message: "Refresh token expired" }),
         { status: 401 }
       )
     ) as unknown as typeof fetch;
-
-    await client.connect();
 
     let tokenExpiredEmitted = false;
     client.on("token_expired", () => {

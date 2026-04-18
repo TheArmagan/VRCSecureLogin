@@ -73,6 +73,19 @@ VRChat does not offer a standard OAuth 2.0 system. Every third-party application
 
 ---
 
+## Screenshots
+
+| Screenshot | Description |
+|------------|-------------|
+| ![Accounts](images/accounts.png) | **Accounts** -- Manage your VRChat accounts with session status and expiry info. |
+| ![Connected Apps](images/connected_apps.png) | **Connected Apps** -- View and manage third-party applications with their granted scopes. |
+| ![Consent Dialog](images/consent.png) | **Consent Dialog** -- Review requested permissions and choose which accounts to grant access to. |
+| ![Audit Log](images/audit_log.png) | **Audit Log** -- Full history of API requests, app registrations, and security events. |
+| ![Settings](images/settings.png) | **Settings** -- Configure API port, rate limits, token TTL, and other advanced options. |
+| ![Switch Avatar](images/switch_avatar.png) | **Switch Avatar** -- DeepLink confirmation dialog for switching avatars with account selection. |
+
+---
+
 ## Supported Platforms
 
 | Platform | Status |

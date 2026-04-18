@@ -85,7 +85,7 @@ export class VRCSLClient extends EventEmitter {
       reconnectInterval: options.reconnectInterval ?? 5000,
       maxReconnectAttempts: options.maxReconnectAttempts ?? 10,
       connectionTimeout: options.connectionTimeout ?? 3000,
-      requestTimeout: options.requestTimeout ?? 15000,
+      requestTimeout: options.requestTimeout ?? 60000 * 5,
     };
 
     this.log = createLogger(options.logLevel ?? "silent", options.logger);
@@ -146,6 +146,32 @@ export class VRCSLClient extends EventEmitter {
     if (this.opts.transportMode === "http") {
       this.httpTransport = new HTTPTransport(transportOpts);
       this._activeTransport = "http";
+
+      // Validate stored token
+      if (this.accessToken) {
+        try {
+          await this.httpTransport.getAccounts(this.accessToken);
+        } catch (err) {
+          if (err instanceof VRCSLError && err.code === "invalid_token") {
+            // Try refresh
+            if (this.refreshTokenValue) {
+              try {
+                this.log.debug("Stored token expired, attempting refresh");
+                const result = await this.httpTransport.refresh(this.refreshTokenValue);
+                await this.storeTokens(result.token, result.refreshToken);
+                this.log.info("Token refreshed successfully during connect");
+              } catch {
+                this.log.warn("Token refresh failed, clearing credentials");
+                await this.clearTokens();
+              }
+            } else {
+              await this.clearTokens();
+            }
+          }
+          // Non-auth errors (network, etc) — keep tokens, server might be temporarily down
+        }
+      }
+
       this._state = "connected";
       this.log.info("Connected via HTTP transport");
       this.emit("connected", {});
@@ -155,9 +181,35 @@ export class VRCSLClient extends EventEmitter {
     // Try WebSocket first (auto or ws mode)
     try {
       const ws = new WSTransport(transportOpts);
-      await ws.connect(this.accessToken ?? undefined);
+      await ws.connect();
       this.wsTransport = ws;
       this._activeTransport = "ws";
+
+      // Validate stored token via WS auth
+      if (this.accessToken) {
+        try {
+          await this.wsAuthenticateToken(ws, this.accessToken);
+        } catch {
+          // Token invalid — try refresh
+          if (this.refreshTokenValue) {
+            try {
+              this.log.debug("Stored token expired, attempting refresh");
+              const transport = this.getTransport();
+              const result = await transport.refresh(this.refreshTokenValue);
+              await this.storeTokens(result.token, result.refreshToken);
+              await this.wsAuthenticateToken(ws, result.token);
+              this.log.info("Token refreshed successfully during connect");
+            } catch {
+              this.log.warn("Token refresh failed, clearing credentials");
+              await this.clearTokens();
+            }
+          } else {
+            this.log.info("Stored token invalid and no refresh token, clearing");
+            await this.clearTokens();
+          }
+        }
+      }
+
       this._state = "connected";
       this.log.info("Connected via WebSocket transport");
 
@@ -382,6 +434,17 @@ export class VRCSLClient extends EventEmitter {
     this.refreshTokenValue = refreshToken;
     await this.store.set(TOKEN_KEY, token);
     await this.store.set(REFRESH_TOKEN_KEY, refreshToken);
+  }
+
+  private async clearTokens(): Promise<void> {
+    this.accessToken = null;
+    this.refreshTokenValue = null;
+    await this.store.remove(TOKEN_KEY);
+    await this.store.remove(REFRESH_TOKEN_KEY);
+  }
+
+  private async wsAuthenticateToken(ws: WSTransport, token: string): Promise<void> {
+    await ws.authenticate(token);
   }
 
   /** Execute an authenticated request with auto-refresh on 401. */

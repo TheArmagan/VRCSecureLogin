@@ -80,6 +80,7 @@ interface VRCSLBridge {
 
   // Scope helpers
   getScopeDescription(scope: string): Promise<string>
+  getScopeDescriptions(scopes: string[]): Promise<Record<string, string>>
   validateScopes(scopes: string[]): Promise<string[]>
 
   // Events
@@ -92,6 +93,9 @@ interface VRCSLBridge {
   // Deep Link Confirmation
   onDeeplinkConfirmation(cb: (request: unknown) => void): () => void
   sendDeeplinkConfirmationResult(confirmed: boolean, selectedAccountIdx: number): void
+
+  // App Info
+  getVersion(): Promise<string>
 
   // Window Controls
   windowMinimize(): Promise<void>

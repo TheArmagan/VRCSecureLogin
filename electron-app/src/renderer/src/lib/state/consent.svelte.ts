@@ -23,17 +23,18 @@ export function getConsentRequest() {
   return consentRequest
 }
 
-export async function fetchConsentRequest(): Promise<void> {
-  consentRequest = await window.vrcsl.getConsentRequest()
-}
-
 export async function respondToConsent(
   requestId: string,
   approved: boolean,
   grantedScopes: string[],
   grantedAccountIds: string[]
 ): Promise<void> {
-  await window.vrcsl.respondToConsent({ requestId, approved, grantedScopes, grantedAccountIds })
+  await window.vrcsl.respondToConsent({
+    requestId,
+    approved,
+    grantedScopes: [...grantedScopes],
+    grantedAccountIds: [...grantedAccountIds]
+  })
   consentRequest = null
 }
 

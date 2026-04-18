@@ -1,6 +1,6 @@
 // ─── IPC Handlers: Bridge between renderer and main process ───
 
-import { ipcMain, BrowserWindow } from 'electron'
+import { ipcMain, BrowserWindow, app } from 'electron'
 import { accountManager } from './account-manager'
 import { tokenManager } from './token-manager'
 import { auditLogger } from './audit-logger'
@@ -27,35 +27,10 @@ let pendingConsent: {
   resolve: (result: { approved: boolean; grantedScopes: string[]; grantedAccountIds: string[] }) => void
 } | null = null
 
-let consentWindow: BrowserWindow | null = null
 let mainWindowRef: BrowserWindow | null = null
 
 export function setMainWindowRef(win: BrowserWindow): void {
   mainWindowRef = win
-}
-
-function createConsentWindow(parentWindow: BrowserWindow): BrowserWindow {
-  const win = new BrowserWindow({
-    width: 520,
-    height: 680,
-    resizable: false,
-    minimizable: false,
-    maximizable: false,
-    alwaysOnTop: true,
-    modal: true,
-    parent: parentWindow,
-    show: false,
-    webPreferences: {
-      preload: parentWindow.webContents.getURL().includes('dev')
-        ? require('path').join(__dirname, '../preload/index.js')
-        : require('path').join(__dirname, '../preload/index.js'),
-      sandbox: false
-    }
-  })
-
-  win.setMenuBarVisibility(false)
-
-  return win
 }
 
 /**
@@ -156,11 +131,6 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         grantedAccountIds: response.grantedAccountIds
       })
       pendingConsent = null
-
-      if (consentWindow) {
-        consentWindow.close()
-        consentWindow = null
-      }
     }
   })
 
@@ -168,6 +138,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
   ipcMain.handle('vrcsl:getScopeDescription', (_e, scope: string) => {
     return getScopeDescription(scope)
+  })
+
+  ipcMain.handle('vrcsl:getScopeDescriptions', (_e, scopes: string[]) => {
+    const result: Record<string, string> = {}
+    for (const scope of scopes) {
+      result[scope] = getScopeDescription(scope)
+    }
+    return result
   })
 
   ipcMain.handle('vrcsl:validateScopes', (_e, scopes: string[]) => {
@@ -199,44 +177,15 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     return new Promise((resolve) => {
       pendingConsent = { request: consentRequest, resolve }
 
-      // Show consent dialog
+      // Show consent dialog as overlay in the main window
       if (mainWindowRef) {
-        // Send to renderer to show consent UI
         mainWindowRef.webContents.send('vrcsl:consentRequested', consentRequest)
 
-        // Also create a topmost window for consent
-        if (!consentWindow || consentWindow.isDestroyed()) {
-          consentWindow = createConsentWindow(mainWindowRef)
-        }
-
-        // Load the consent page
-        const rendererUrl = mainWindowRef.webContents.getURL()
-        if (rendererUrl.includes('localhost') || rendererUrl.includes('127.0.0.1')) {
-          // Dev mode
-          const baseUrl = new URL(rendererUrl)
-          consentWindow.loadURL(`${baseUrl.origin}/#/consent`)
-        } else {
-          consentWindow.loadFile(require('path').join(__dirname, '../renderer/index.html'), {
-            hash: '/consent'
-          })
-        }
-
-        consentWindow.once('ready-to-show', () => {
-          consentWindow?.show()
-        })
-
-        // If consent window is closed without responding, deny
-        consentWindow.on('closed', () => {
-          if (pendingConsent?.request.requestId === consentRequest.requestId) {
-            pendingConsent.resolve({
-              approved: false,
-              grantedScopes: [],
-              grantedAccountIds: []
-            })
-            pendingConsent = null
-          }
-          consentWindow = null
-        })
+        // Bring main window to front so the user sees the consent dialog
+        if (mainWindowRef.isMinimized()) mainWindowRef.restore()
+        mainWindowRef.setAlwaysOnTop(true)
+        mainWindowRef.focus()
+        mainWindowRef.setAlwaysOnTop(false)
       }
     })
   })
@@ -258,6 +207,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   accountManager.on('session-refreshed', (accountId: string) => {
     mainWindow.webContents.send('vrcsl:accountStatusChanged', accountId, 'online')
   })
+
+  // ─── App Info ───
+
+  ipcMain.handle('vrcsl:getVersion', () => app.getVersion())
 
   // ─── Window Controls ───
 

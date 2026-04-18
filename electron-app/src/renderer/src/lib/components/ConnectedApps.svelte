@@ -3,6 +3,7 @@
   import * as Table from "$lib/components/ui/table";
   import * as AlertDialog from "$lib/components/ui/alert-dialog";
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
+  import * as Tooltip from "$lib/components/ui/tooltip";
   import { Badge } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button";
   import { Skeleton } from "$lib/components/ui/skeleton";
@@ -19,9 +20,26 @@
 
   let confirmRevokeId = $state<string | null>(null);
   let confirmRevokeOpen = $state(false);
+  let scopeDescriptions = $state<Record<string, string>>({});
 
   const registrations = $derived(getRegistrations());
   const loading = $derived(isLoading());
+
+  onMount(() => {
+    fetchRegistrations();
+  });
+
+  // Resolve scope descriptions whenever registrations change
+  $effect(() => {
+    const allScopes = [
+      ...new Set(registrations.flatMap((r) => r.grantedScopes)),
+    ];
+    if (allScopes.length > 0) {
+      window.vrcsl.getScopeDescriptions(allScopes).then((descs) => {
+        scopeDescriptions = descs;
+      });
+    }
+  });
 
   onMount(() => {
     fetchRegistrations();
@@ -101,12 +119,24 @@
                 </div>
               </Table.Cell>
               <Table.Cell>
-                <span class="text-sm text-muted-foreground">
-                  {reg.grantedScopes.length} scope{reg.grantedScopes.length !==
-                  1
-                    ? "s"
-                    : ""}
-                </span>
+                <div class="flex flex-wrap gap-1">
+                  {#each reg.grantedScopes as scope}
+                    <Tooltip.Provider>
+                      <Tooltip.Root>
+                        <Tooltip.Trigger>
+                          <Badge variant="outline" class="text-xs font-mono"
+                            >{scope}</Badge
+                          >
+                        </Tooltip.Trigger>
+                        {#if scopeDescriptions[scope] && scopeDescriptions[scope] !== scope}
+                          <Tooltip.Content>
+                            <p>{scopeDescriptions[scope]}</p>
+                          </Tooltip.Content>
+                        {/if}
+                      </Tooltip.Root>
+                    </Tooltip.Provider>
+                  {/each}
+                </div>
               </Table.Cell>
               <Table.Cell class="text-sm text-muted-foreground">
                 {formatDate(reg.lastUsedAt)}

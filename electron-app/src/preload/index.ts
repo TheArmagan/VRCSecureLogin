@@ -33,6 +33,7 @@ const vrcsl = {
 
   // ─── Scope helpers ───
   getScopeDescription: (scope: string) => ipcRenderer.invoke('vrcsl:getScopeDescription', scope),
+  getScopeDescriptions: (scopes: string[]) => ipcRenderer.invoke('vrcsl:getScopeDescriptions', scopes),
   validateScopes: (scopes: string[]) => ipcRenderer.invoke('vrcsl:validateScopes', scopes),
 
   // ─── Events from main ───
@@ -69,6 +70,9 @@ const vrcsl = {
   sendDeeplinkConfirmationResult: (confirmed: boolean, selectedAccountIdx: number) => {
     ipcRenderer.send('vrcsl:deeplinkConfirmationResult', confirmed, selectedAccountIdx)
   },
+
+  // ─── App Info ───
+  getVersion: () => ipcRenderer.invoke('vrcsl:getVersion'),
 
   // ─── Window Controls ───
   windowMinimize: () => ipcRenderer.invoke('vrcsl:windowMinimize'),

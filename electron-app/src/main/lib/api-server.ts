@@ -40,12 +40,18 @@ export function setConsentCallback(
   consentCallback = cb
 }
 
+const WS_PING_INTERVAL = 30_000
+const WS_PONG_TIMEOUT = 10_000
+
 interface WsClient {
   ws: WebSocket
   registration: AppRegistration | null
   tokenHash: string | null
   subscribedAccountIds: string[]
   subscribedEvents: string[]
+  pingInterval: ReturnType<typeof setInterval> | null
+  pongTimeout: ReturnType<typeof setTimeout> | null
+  authTimeout: ReturnType<typeof setTimeout> | null
 }
 
 export class ApiServer {
@@ -84,8 +90,9 @@ export class ApiServer {
   }
 
   stop(): void {
-    // Close all WS clients
+    // Close all WS clients and clean up their timers
     for (const client of this.wsClients) {
+      this.cleanupWsClient(client)
       client.ws.close()
     }
     this.wsClients.clear()
@@ -514,17 +521,23 @@ export class ApiServer {
       registration: null,
       tokenHash: null,
       subscribedAccountIds: [],
-      subscribedEvents: []
+      subscribedEvents: [],
+      pingInterval: null,
+      pongTimeout: null,
+      authTimeout: null
     }
 
     this.wsClients.add(client)
 
-    // Must auth within 10 seconds
-    const authTimeout = setTimeout(() => {
+    // Must auth within 5 minutes (consent dialog may take time)
+    client.authTimeout = setTimeout(() => {
       if (!client.registration) {
         ws.close(4001, 'Authentication timeout')
       }
-    }, 10000)
+    }, 5 * 60 * 1000)
+
+    // Server-side keepalive ping
+    this.setupWsPing(client)
 
     ws.on('message', async (raw: WebSocket.RawData) => {
       try {
@@ -536,13 +549,47 @@ export class ApiServer {
     })
 
     ws.on('close', () => {
-      clearTimeout(authTimeout)
-      this.wsClients.delete(client)
+      this.cleanupWsClient(client)
     })
 
     ws.on('error', () => {
-      this.wsClients.delete(client)
+      this.cleanupWsClient(client)
     })
+  }
+
+  private setupWsPing(client: WsClient): void {
+    client.pingInterval = setInterval(() => {
+      if (client.ws.readyState === WebSocket.OPEN) {
+        client.ws.ping()
+        client.pongTimeout = setTimeout(() => {
+          // No pong received — terminate dead connection
+          client.ws.terminate()
+        }, WS_PONG_TIMEOUT)
+      }
+    }, WS_PING_INTERVAL)
+
+    client.ws.on('pong', () => {
+      if (client.pongTimeout) {
+        clearTimeout(client.pongTimeout)
+        client.pongTimeout = null
+      }
+    })
+  }
+
+  private cleanupWsClient(client: WsClient): void {
+    if (client.authTimeout) {
+      clearTimeout(client.authTimeout)
+      client.authTimeout = null
+    }
+    if (client.pingInterval) {
+      clearInterval(client.pingInterval)
+      client.pingInterval = null
+    }
+    if (client.pongTimeout) {
+      clearTimeout(client.pongTimeout)
+      client.pongTimeout = null
+    }
+    this.wsClients.delete(client)
   }
 
   private async handleWsMessage(client: WsClient, msg: WsMessage, req: IncomingMessage): Promise<void> {
@@ -551,6 +598,10 @@ export class ApiServer {
         return this.handleWsAuth(client, msg)
       case 'register':
         return this.handleWsRegister(client, msg, req)
+      case 'refresh':
+        return this.handleWsRefresh(client, msg)
+      case 'accounts':
+        return this.handleWsAccounts(client, msg)
       case 'api_request':
         return this.handleWsApiRequest(client, msg)
       case 'subscribe':
@@ -593,6 +644,12 @@ export class ApiServer {
     client.registration = registration
     client.tokenHash = createHash('sha256').update(body.token).digest('hex')
 
+    // Clear auth timeout on successful authentication
+    if (client.authTimeout) {
+      clearTimeout(client.authTimeout)
+      client.authTimeout = null
+    }
+
     const accounts = await accountManager.getAccounts()
     const grantedAccounts = accounts
       .filter((a) => registration.grantedAccountIds.includes(a.id))
@@ -602,6 +659,68 @@ export class ApiServer {
       requestId: msg.requestId,
       type: 'auth_response',
       body: { success: true, accounts: grantedAccounts }
+    }))
+  }
+
+  private async handleWsRefresh(client: WsClient, msg: WsMessage): Promise<void> {
+    const body = msg.body as { refreshToken?: string }
+    if (!body?.refreshToken) {
+      client.ws.send(JSON.stringify({
+        requestId: msg.requestId,
+        type: 'error',
+        body: { error: 'invalid_request', message: 'refreshToken is required' }
+      }))
+      return
+    }
+
+    const result = await tokenManager.refreshToken(body.refreshToken)
+    if (!result) {
+      client.ws.send(JSON.stringify({
+        requestId: msg.requestId,
+        type: 'error',
+        body: { error: 'invalid_token', message: 'Refresh token is invalid or expired' }
+      }))
+      return
+    }
+
+    // Update client registration with new token
+    const registration = await tokenManager.validateToken(result.token)
+    if (registration) {
+      client.registration = registration
+      client.tokenHash = createHash('sha256').update(result.token).digest('hex')
+    }
+
+    client.ws.send(JSON.stringify({
+      requestId: msg.requestId,
+      type: 'refresh_response',
+      body: result
+    }))
+  }
+
+  private async handleWsAccounts(client: WsClient, msg: WsMessage): Promise<void> {
+    if (!client.registration) {
+      client.ws.send(JSON.stringify({
+        requestId: msg.requestId,
+        type: 'error',
+        body: { error: 'invalid_token', message: 'Not authenticated' }
+      }))
+      return
+    }
+
+    const allAccounts = await accountManager.getAccounts()
+    const accounts = allAccounts
+      .filter((a) => client.registration!.grantedAccountIds.includes(a.id))
+      .map((a) => ({
+        userId: a.vrchatUserId,
+        displayName: a.displayName,
+        status: a.status,
+        avatarThumbnailUrl: a.avatarThumbnailUrl
+      }))
+
+    client.ws.send(JSON.stringify({
+      requestId: msg.requestId,
+      type: 'accounts_response',
+      body: { accounts }
     }))
   }
 
@@ -655,6 +774,12 @@ export class ApiServer {
     // Auto-authenticate this WS client
     client.registration = registration
     client.tokenHash = createHash('sha256').update(token).digest('hex')
+
+    // Clear auth timeout on successful registration
+    if (client.authTimeout) {
+      clearTimeout(client.authTimeout)
+      client.authTimeout = null
+    }
 
     client.ws.send(JSON.stringify({
       requestId: msg.requestId,
