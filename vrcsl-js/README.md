@@ -834,4 +834,4 @@ The `ws` package is conditionally imported only in Node.js environments where na
 
 ## License
 
-This project is licensed under the terms specified in the [LICENSE](../LICENSE) file.
+This project is licensed under the terms specified in the [LICENSE](https://github.com/TheArmagan/VRCSecureLogin/blob/main/LICENSE) file.

@@ -1,6 +1,6 @@
 {
   "name": "vrcsl.js",
-  "version": "0.0.1",
+  "version": "0.0.3",
   "type": "module",
   "description": "Official client SDK for VRCSecureLogin (VRCSL)",
   "main": "./dist/index.cjs",
@@ -41,5 +41,21 @@
     "typescript": "^5.5.0"
   },
   "license": "GPL-3.0-only",
-  "homepage": "https://github.com/TheArmagan/VRCSecureLogin"
+  "homepage": "https://github.com/TheArmagan/VRCSecureLogin",
+  "readme": "./README.md",
+  "keywords": [
+    "vrchat",
+    "vrcsl",
+    "vrcsecurelogin",
+    "vrchat-api",
+    "vrchat-sdk",
+    "oauth",
+    "credential-vault",
+    "api-proxy",
+    "websocket",
+    "sse",
+    "deeplink",
+    "vr",
+    "social-vr"
+  ]
 }
