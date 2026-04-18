@@ -23,7 +23,6 @@ import type {
 } from './types'
 
 const MAX_BODY_SIZE = 1024 * 1024 // 1 MB
-const MAX_WS_PER_TOKEN = 3
 
 // Consent flow callback — set by ipc-handlers
 let consentCallback:

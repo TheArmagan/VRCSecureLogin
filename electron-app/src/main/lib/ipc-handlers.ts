@@ -6,7 +6,6 @@ import { tokenManager } from './token-manager'
 import { auditLogger } from './audit-logger'
 import { DataStore } from './data-store'
 import { apiServer, setConsentCallback } from './api-server'
-import { pipelineManager } from './pipeline-manager'
 import { getScopeDescription, validateScopes } from './scope-resolver'
 import type {
   AppSettings,
