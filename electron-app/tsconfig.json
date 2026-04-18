@@ -1,0 +1,22 @@
+{
+  "files": [],
+  "compilerOptions": {
+    // ... other options
+    "paths": {
+      "$lib": [
+        "./src/renderer/src/lib"
+      ],
+      "$lib/*": [
+        "./src/renderer/src/lib/*"
+      ]
+    }
+  },
+  "references": [
+    {
+      "path": "./tsconfig.node.json"
+    },
+    {
+      "path": "./tsconfig.web.json"
+    }
+  ]
+}
