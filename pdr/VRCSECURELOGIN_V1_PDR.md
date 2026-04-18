@@ -20,12 +20,13 @@
 8. [Scope System](#8-scope-system)
 9. [Token Management](#9-token-management)
 10. [API Design](#10-api-design)
-11. [Data Storage](#11-data-storage)
-12. [UI/UX Design](#12-uiux-design)
-13. [Update Mechanism](#13-update-mechanism)
-14. [Audit Logging](#14-audit-logging)
-15. [Threat Model](#15-threat-model)
-16. [Project Structure](#16-project-structure)
+11. [Pipeline & Event System](#11-pipeline--event-system)
+12. [Data Storage](#12-data-storage)
+13. [UI/UX Design](#13-uiux-design)
+14. [Update Mechanism](#14-update-mechanism)
+15. [Audit Logging](#15-audit-logging)
+16. [Threat Model](#16-threat-model)
+17. [Project Structure](#17-project-structure)
 
 ---
 
@@ -287,7 +288,22 @@ vrchat.<category>.<action>
 | `vrchat.notifications.*` | Full notification access | All `/notifications/` endpoints |
 | `vrchat.playermod.*` | Player moderation | All `/auth/user/playermoderations` endpoints |
 | `vrchat.files.*` | File access | All `/files/` endpoints |
-| `vrchat.*` | Full unrestricted API access | All VRChat API endpoints |
+| `vrchat.pipeline.*` | All pipeline event subscriptions | All VRChat + VRCSL events |
+| `vrchat.pipeline.friend-online` | Friend online events | `friend-online` |
+| `vrchat.pipeline.friend-offline` | Friend offline events | `friend-offline` |
+| `vrchat.pipeline.friend-add` | Friend added events | `friend-add` |
+| `vrchat.pipeline.friend-delete` | Friend removed events | `friend-delete` |
+| `vrchat.pipeline.friend-update` | Friend profile update events | `friend-update` |
+| `vrchat.pipeline.friend-location` | Friend location change events | `friend-location` |
+| `vrchat.pipeline.user-update` | Current user update events | `user-update` |
+| `vrchat.pipeline.user-location` | Current user location events | `user-location` |
+| `vrchat.pipeline.notification` | Notification events | `notification`, `notification-v2` |
+| `vrchat.pipeline.content-refresh` | Content refresh events | `content-refresh` |
+| `vrcsl.events.*` | All VRCSL internal events | session, token, account events |
+| `vrcsl.events.session` | Session state change events | `session-refreshed`, `session-expired` |
+| `vrcsl.events.account` | Account state change events | `account-online`, `account-offline` |
+| `vrcsl.events.token` | Token lifecycle events | `token-revoked`, `token-expired` |
+| `vrchat.*` | Full unrestricted API + pipeline access | All VRChat API endpoints + events |
 
 ### Scope Resolution
 
@@ -607,6 +623,11 @@ The WebSocket API serves the same purpose as the HTTP API but is designed for **
 | `api_response` | server → client | VRChat API response |
 | `register` | client → server | Register a new app (triggers consent) |
 | `register_response` | server → client | Registration result with tokens |
+| `subscribe` | client → server | Subscribe to pipeline events |
+| `subscribe_response` | server → client | Subscription confirmation |
+| `unsubscribe` | client → server | Unsubscribe from pipeline events |
+| `unsubscribe_response` | server → client | Unsubscription confirmation |
+| `event` | server → client | Pipeline event push |
 | `error` | server → client | Error message |
 | `ping` | client → server | Keep-alive ping |
 | `pong` | server → client | Keep-alive pong response |
@@ -629,6 +650,66 @@ Web apps that don't have a token yet can send a `register` message:
 ```
 
 The consent dialog will show the `origin` header value for web-based clients. On approval, the server responds with the same token payload as the HTTP `/register` endpoint.
+
+#### WebSocket Pipeline Subscription
+
+Authenticated WebSocket clients can subscribe to real-time pipeline events:
+
+**Subscribe:**
+```json
+{
+  "requestId": "sub-1",
+  "type": "subscribe",
+  "body": {
+    "accountIds": ["usr_xxx"],
+    "events": ["friend-online", "friend-offline", "user-update"]
+  }
+}
+```
+
+- `accountIds` (required): Array of VRChat user IDs to receive events for. Must be within the token's granted accounts.
+- `events` (optional): Array of event type filters. If omitted, all events the token's scopes permit are delivered.
+
+**Subscribe response:**
+```json
+{
+  "requestId": "sub-1",
+  "type": "subscribe_response",
+  "body": {
+    "success": true,
+    "subscribedAccounts": ["usr_xxx"],
+    "subscribedEvents": ["friend-online", "friend-offline", "user-update"]
+  }
+}
+```
+
+**Event push (server → client):**
+```json
+{
+  "type": "event",
+  "userId": "usr_xxx",
+  "body": {
+    "eventType": "friend-online",
+    "source": "vrchat",
+    "timestamp": "2026-04-18T12:00:00.000Z",
+    "data": {
+      "userId": "usr_yyy",
+      "user": { "displayName": "FriendName", "status": "active" }
+    }
+  }
+}
+```
+
+**Unsubscribe:**
+```json
+{
+  "requestId": "unsub-1",
+  "type": "unsubscribe",
+  "body": {}
+}
+```
+
+Unsubscribing stops all event delivery on this connection. The client can re-subscribe at any time.
 
 ---
 
@@ -676,9 +757,153 @@ vrcsl://joinworld?worldId=wrld_xxx&instanceId=12345~private(usr_xxx)
 
 ---
 
-## 11. Data Storage
+## 11. Pipeline & Event System
 
-### 11.1 Storage Location
+VRCSL provides a real-time event pipeline that combines **VRChat pipeline events** (forwarded from VRChat's WebSocket) and **VRCSL internal events** (session changes, token lifecycle, account status). Third-party apps can subscribe to these events via WebSocket or consume them over HTTP using Server-Sent Events (SSE).
+
+### 11.1 Architecture
+
+```
+┌──────────────────────────┐
+│   VRChat WebSocket       │
+│   pipeline.vrchat.cloud  │
+└──────────┬───────────────┘
+           │ (per-account connection)
+           ▼
+┌──────────────────────────┐      ┌──────────────────────────┐
+│   Pipeline Manager       │◄─────│   Account Manager        │
+│   (Main Process)         │      │   (VRCSL internal events)│
+└──────────┬───────────────┘      └──────────────────────────┘
+           │
+           │ scope-filtered, account-filtered
+           ▼
+    ┌──────┴──────┐
+    │             │
+    ▼             ▼
+┌────────┐  ┌─────────┐
+│ WS     │  │ SSE     │
+│ /ws    │  │ /events │
+└────────┘  └─────────┘
+```
+
+### 11.2 VRChat Pipeline Connection
+
+- VRCSL maintains one WebSocket connection per active VRChat account to VRChat's pipeline server (`pipeline.vrchat.cloud`).
+- These connections are managed by the Account Manager as part of session keep-alive.
+- Incoming VRChat events are parsed, tagged with the source `accountId`, and forwarded to the Pipeline Manager.
+
+### 11.3 VRCSL Internal Events
+
+In addition to VRChat events, VRCSL emits its own events:
+
+| Event Type | Source | Description |
+|---|---|---|
+| `session-refreshed` | `vrcsl` | Account session was successfully refreshed |
+| `session-expired` | `vrcsl` | Account session expired, re-auth needed |
+| `account-online` | `vrcsl` | Account came online |
+| `account-offline` | `vrcsl` | Account went offline |
+| `token-revoked` | `vrcsl` | A third-party app token was revoked by the user |
+| `token-expired` | `vrcsl` | A third-party app token expired |
+
+### 11.4 VRChat Pipeline Events
+
+All known VRChat pipeline events are forwarded (subject to scope filtering):
+
+| Event Type | Scope Required | Description |
+|---|---|---|
+| `friend-online` | `vrchat.pipeline.friend-online` | A friend came online |
+| `friend-offline` | `vrchat.pipeline.friend-offline` | A friend went offline |
+| `friend-add` | `vrchat.pipeline.friend-add` | A friend was added |
+| `friend-delete` | `vrchat.pipeline.friend-delete` | A friend was removed |
+| `friend-update` | `vrchat.pipeline.friend-update` | A friend's profile changed |
+| `friend-location` | `vrchat.pipeline.friend-location` | A friend changed location/world |
+| `user-update` | `vrchat.pipeline.user-update` | Current user's profile was updated |
+| `user-location` | `vrchat.pipeline.user-location` | Current user's location changed |
+| `notification` | `vrchat.pipeline.notification` | New notification received |
+| `notification-v2` | `vrchat.pipeline.notification` | New notification v2 received |
+| `see-notification` | `vrchat.pipeline.notification` | Notification was seen |
+| `hide-notification` | `vrchat.pipeline.notification` | Notification was hidden |
+| `content-refresh` | `vrchat.pipeline.content-refresh` | Content refresh signal |
+
+The wildcard scope `vrchat.pipeline.*` grants access to all VRChat pipeline events. The wildcard `vrchat.*` also includes all pipeline events.
+
+### 11.5 Event Delivery via SSE (HTTP)
+
+#### `GET /events`
+
+Server-Sent Events endpoint for HTTP-based clients. Requires token authentication.
+
+**Request:**
+```
+GET /events?accountIds=usr_xxx,usr_yyy&events=friend-online,friend-offline HTTP/1.1
+Host: 127.0.0.1:7642
+Authorization: Bearer vrcsl_at_...
+Accept: text/event-stream
+```
+
+**Query Parameters:**
+
+| Parameter | Required | Description |
+|---|---|---|
+| `accountIds` | Yes | Comma-separated VRChat user IDs to receive events for. Must be within granted accounts. |
+| `events` | No | Comma-separated event type filter. If omitted, all scope-permitted events are sent. |
+
+**Response (200, `text/event-stream`):**
+```
+event: friend-online
+data: {"userId":"usr_xxx","eventType":"friend-online","source":"vrchat","timestamp":"2026-04-18T12:00:00.000Z","data":{"userId":"usr_yyy","user":{"displayName":"FriendName"}}}
+
+event: session-refreshed
+data: {"userId":"usr_xxx","eventType":"session-refreshed","source":"vrcsl","timestamp":"2026-04-18T12:05:00.000Z","data":{}}
+
+```
+
+- Each SSE message uses the `event` field set to the event type and the `data` field containing the JSON payload.
+- The connection remains open and events are streamed as they occur.
+- No reconnection buffer. If the connection drops, events during the disconnection period are lost.
+- Standard SSE `retry` field is sent to suggest a reconnection interval (default: 3000ms).
+- Rate limiting applies to the initial connection request only, not to individual events.
+
+### 11.6 Event Delivery via WebSocket
+
+WebSocket event subscription is documented in [Section 10.2 — WebSocket Pipeline Subscription](#102-websocket-api). The same event format and filtering rules apply.
+
+### 11.7 Event Format (Unified)
+
+All events, regardless of delivery mechanism (SSE or WebSocket), follow the same structure:
+
+```json
+{
+  "userId": "usr_xxx",
+  "eventType": "friend-online",
+  "source": "vrchat",
+  "timestamp": "2026-04-18T12:00:00.000Z",
+  "data": { /* event-specific payload */ }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `userId` | `string` | The VRCSL account that produced this event |
+| `eventType` | `string` | The event type identifier |
+| `source` | `"vrchat"` \| `"vrcsl"` | Whether the event originates from VRChat's pipeline or VRCSL internally |
+| `timestamp` | `string` (ISO 8601) | When the event was received/generated |
+| `data` | `object` | Event-specific payload (varies per event type) |
+
+### 11.8 Scope Filtering
+
+- When a client subscribes (via WebSocket `subscribe` or HTTP `/events`), VRCSL computes the intersection of:
+  1. The token's granted scopes.
+  2. The client's requested event filter (if any).
+  3. The client's requested account IDs vs. the token's granted account IDs.
+- Only events that pass all three checks are delivered.
+- If the token does not have any pipeline scopes, subscription is rejected with `scope_denied`.
+
+---
+
+## 12. Data Storage
+
+### 12.1 Storage Location
 
 ```
 {app.getPath('userData')}/
@@ -689,7 +914,7 @@ vrcsl://joinworld?worldId=wrld_xxx&instanceId=12345~private(usr_xxx)
 └── audit.log.1              # Rotated audit log
 ```
 
-### 11.2 Encryption Scheme
+### 12.2 Encryption Scheme
 
 - **Algorithm**: AES-256-GCM
 - **Key Derivation**: A 256-bit encryption key is generated randomly on first launch and stored in the OS keychain under `vrcsl/master-key`.
@@ -697,7 +922,7 @@ vrcsl://joinworld?worldId=wrld_xxx&instanceId=12345~private(usr_xxx)
 - **Authentication tag**: The 128-bit GCM auth tag is appended to the ciphertext.
 - **File format**: `<IV (12 bytes)><ciphertext><auth tag (16 bytes)>`
 
-### 11.3 Data Schemas
+### 12.3 Data Schemas
 
 #### `accounts.enc.json` (decrypted structure)
 
@@ -766,9 +991,9 @@ vrcsl://joinworld?worldId=wrld_xxx&instanceId=12345~private(usr_xxx)
 
 ---
 
-## 12. UI/UX Design
+## 13. UI/UX Design
 
-### 12.0 Frontend Stack & State Management
+### 13.0 Frontend Stack & State Management
 
 **UI Component Library**: All UI is built with **shadcn-svelte** components (Button, Dialog, Card, Tabs, Table, Badge, Alert, Input, Switch, ScrollArea, Sonner, etc.) styled with **TailwindCSS 4**. Components are installed via the `shadcn-svelte` CLI and live in `src/renderer/src/components/ui/`.
 
@@ -819,7 +1044,7 @@ Each state module exports reactive state variables and async functions that call
 | `DropdownMenu` | Account card actions (remove, re-auth), tray-like quick actions |
 | `Tooltip` | Scope descriptions, signature status info |
 
-### 12.1 Main Window
+### 13.1 Main Window
 
 The main window serves as the dashboard and settings interface. It minimizes to the system tray instead of closing. Navigation uses shadcn-svelte `Tabs` at the top of the window.
 
@@ -830,7 +1055,7 @@ The main window serves as the dashboard and settings interface. It minimizes to 
 3. **Audit Log** — Filterable `Table` of all API requests from third-party apps. Shows timestamp, app name, endpoint, account used, and result.
 4. **Settings** — API port (`Input`), rate limits, token TTL defaults, session check interval, tray behavior (`Switch`), auto-update preferences (`Switch`).
 
-### 12.2 Consent Dialog
+### 13.2 Consent Dialog
 
 A **topmost, always-on-top** `BrowserWindow` (separate from the main window) that appears when a third-party app requests registration. The main window cannot be interacted with while this dialog is open (modal behavior relative to the app). The dialog content is a dedicated Svelte component rendered with shadcn-svelte components.
 
@@ -843,7 +1068,7 @@ A **topmost, always-on-top** `BrowserWindow` (separate from the main window) tha
 - `Checkbox` list of VRChat accounts to share (all unchecked by default)
 - `Button` **Approve** (primary) / **Deny** (destructive variant)
 
-### 12.3 DeepLink Account Picker
+### 13.3 DeepLink Account Picker
 
 A **topmost** `BrowserWindow` dialog that appears when a DeepLink action is triggered without an `accountIdx` and the user has multiple accounts.
 
@@ -853,7 +1078,7 @@ A **topmost** `BrowserWindow` dialog that appears when a DeepLink action is trig
 - `RadioGroup` list of VRChat accounts
 - `Button` **Confirm** / **Cancel**
 
-### 12.4 System Tray
+### 13.4 System Tray
 
 - Tray icon with a context menu:
   - **Open Dashboard** — Focus/show main window
@@ -862,7 +1087,7 @@ A **topmost** `BrowserWindow` dialog that appears when a DeepLink action is trig
 
 ---
 
-## 13. Update Mechanism
+## 14. Update Mechanism
 
 - On startup and periodically (every 6 hours), VRCSL checks the GitHub repository's releases API for a new release.
 - Release tags follow the format `vVERSION` (e.g., `v1.0.0`, `v1.2.3`).
@@ -876,9 +1101,9 @@ A **topmost** `BrowserWindow` dialog that appears when a DeepLink action is trig
 
 ---
 
-## 14. Audit Logging
+## 15. Audit Logging
 
-### 14.1 Logged Events
+### 15.1 Logged Events
 
 | Event Type | Details Logged |
 |---|---|
@@ -890,6 +1115,10 @@ A **topmost** `BrowserWindow` dialog that appears when a DeepLink action is trig
 | `api.rate_limited` | App name, token hash (first 8 chars), endpoint |
 | `api.scope_denied` | App name, attempted scope, endpoint |
 | `api.account_denied` | App name, attempted userId |
+| `pipeline.subscribed` | App name, subscribed accounts, subscribed event types |
+| `pipeline.unsubscribed` | App name |
+| `pipeline.sse_connected` | App name, subscribed accounts, subscribed event types |
+| `pipeline.sse_disconnected` | App name, duration |
 | `account.added` | VRChat userId, displayName |
 | `account.removed` | VRChat userId |
 | `account.session_refreshed` | VRChat userId |
@@ -899,13 +1128,13 @@ A **topmost** `BrowserWindow` dialog that appears when a DeepLink action is trig
 | `deeplink.executed` | Action, parameters, account used |
 | `security.process_mismatch` | App name, expected path, actual path |
 
-### 14.2 Log Format
+### 15.2 Log Format
 
 ```
 [2026-04-18T12:00:00.000Z] [api.request] appName="My Tool" method=GET path="/avatars/avtr_xxx" userId="usr_xxx" status=200 duration=142ms
 ```
 
-### 14.3 Log Rotation
+### 15.3 Log Rotation
 
 - Max file size: **50 MB** (configurable)
 - Max rotated files: **5** (configurable)
@@ -913,9 +1142,9 @@ A **topmost** `BrowserWindow` dialog that appears when a DeepLink action is trig
 
 ---
 
-## 15. Threat Model
+## 16. Threat Model
 
-### 15.1 Threats & Mitigations
+### 16.1 Threats & Mitigations
 
 | Threat | Severity | Mitigation |
 |---|---|---|
@@ -930,8 +1159,10 @@ A **topmost** `BrowserWindow` dialog that appears when a DeepLink action is trig
 | **Stale sessions leak after account removal** | Medium | Account removal cascades: revokes all associated tokens, deletes keychain entries, and wipes session data. |
 | **External network access to API** | Critical | Server binds to 127.0.0.1 exclusively. Connection source address is verified. |
 | **Replay attack with stolen refresh token** | Medium | Refresh token rotation: each refresh invalidates the old token. If a stolen token is used, the legitimate user's next refresh fails, signaling compromise. |
+| **Pipeline event leaking data across scopes** | High | Events are filtered through scope intersection before delivery. Only events matching the token's granted pipeline scopes and granted accounts are forwarded. |
+| **SSE/WS connection exhaustion** | Medium | Maximum concurrent pipeline subscriptions per token (default: 3). Idle connections are closed after 5 minutes of no activity. |
 
-### 15.2 Out of Scope
+### 16.2 Out of Scope
 
 - Protecting against a fully compromised local OS (kernel-level rootkit, memory dumpers with admin privileges).
 - VRChat API changes or rate limiting imposed by VRChat.
@@ -939,7 +1170,7 @@ A **topmost** `BrowserWindow` dialog that appears when a DeepLink action is trig
 
 ---
 
-## 16. Project Structure
+## 17. Project Structure
 
 ```
 electron-app/
@@ -955,6 +1186,8 @@ electron-app/
 │   │       ├── scope-resolver.ts     # Scope matching & validation
 │   │       ├── rate-limiter.ts       # Per-token rate limiting
 │   │       ├── api-server.ts         # HTTP + WebSocket server (127.0.0.1:7642)
+│   │       ├── pipeline-manager.ts   # VRChat pipeline connections + event routing
+│   │       ├── sse-handler.ts        # SSE /events endpoint handler
 │   │       ├── deeplink-handler.ts   # vrcsl:// protocol handler
 │   │       ├── process-verifier.ts   # PID → path → signature verification
 │   │       ├── audit-logger.ts       # Audit log writer with rotation

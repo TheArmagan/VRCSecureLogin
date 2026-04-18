@@ -18,6 +18,7 @@ VRCSecureLogin (VRCSL) eliminates the need to hand over your VRChat username and
   - [HTTP API](#http-api)
   - [WebSocket API](#websocket-api)
   - [DeepLink API](#deeplink-api)
+- [Pipeline and Event System](#pipeline-and-event-system)
 - [Scope System](#scope-system)
 - [Security](#security)
 - [For Developers (Third-Party Integration)](#for-developers-third-party-integration)
@@ -55,6 +56,7 @@ VRChat does not offer a standard OAuth 2.0 system. Every third-party application
 - **Short-lived tokens** (1-hour access, 30-day refresh) with automatic rotation.
 - **Per-token rate limiting** to prevent abuse from rogue applications.
 - **Audit logging** of all API requests and security events.
+- **Real-time event pipeline** combining VRChat pipeline events and VRCSL internal events, delivered via WebSocket subscription or HTTP Server-Sent Events (SSE).
 - **DeepLink support** (`vrcsl://`) for user-facing actions like one-click avatar switching.
 - **System tray integration** to keep running in the background.
 - **Auto-update** from GitHub Releases with SHA-256 integrity verification.
@@ -130,6 +132,7 @@ Standard REST API for native applications.
 | `/accounts` | `GET` | List VRChat accounts the token has access to. |
 | `/api` | `POST` | Proxy a single VRChat API request. |
 | `/api/batch` | `POST` | Proxy multiple VRChat API requests in one call. |
+| `/events` | `GET` | Server-Sent Events stream for real-time pipeline events. |
 
 All authenticated endpoints require the `Authorization: Bearer vrcsl_at_...` header.
 
@@ -149,6 +152,8 @@ Same functionality as the HTTP API, designed for web-based clients to avoid CORS
 }
 ```
 
+WebSocket clients can also subscribe to real-time pipeline events by sending a `subscribe` message after authentication, specifying which accounts and event types to receive.
+
 ### DeepLink API
 
 User-facing actions triggered via the `vrcsl://` protocol. These do not require tokens and always prompt the user for confirmation.
@@ -161,6 +166,52 @@ User-facing actions triggered via the `vrcsl://` protocol. These do not require 
 | `vrcsl://open` | Open and focus the VRCSL window. |
 
 All DeepLinks accept an optional `accountIdx` parameter. If omitted and the user has multiple accounts, an account picker dialog is shown.
+
+---
+
+## Pipeline and Event System
+
+VRCSL provides a real-time event pipeline that combines two sources:
+
+- **VRChat pipeline events**: Forwarded from VRChat's own WebSocket pipeline (`friend-online`, `friend-offline`, `friend-location`, `user-update`, `notification`, etc.).
+- **VRCSL internal events**: Session and account lifecycle events (`session-refreshed`, `session-expired`, `account-online`, `account-offline`, `token-revoked`).
+
+### Delivery Methods
+
+**WebSocket** -- Send a `subscribe` message after authenticating on `ws://127.0.0.1:7642/ws`:
+
+```json
+{
+  "requestId": "sub-1",
+  "type": "subscribe",
+  "body": {
+    "accountIds": ["usr_xxx"],
+    "events": ["friend-online", "friend-offline"]
+  }
+}
+```
+
+**HTTP SSE** -- Connect to the `/events` endpoint with query parameters:
+
+```
+GET /events?accountIds=usr_xxx&events=friend-online,friend-offline
+Authorization: Bearer vrcsl_at_...
+Accept: text/event-stream
+```
+
+Both methods deliver events in the same unified format:
+
+```json
+{
+  "userId": "usr_xxx",
+  "eventType": "friend-online",
+  "source": "vrchat",
+  "timestamp": "2026-04-18T12:00:00.000Z",
+  "data": { "userId": "usr_yyy", "user": { "displayName": "FriendName" } }
+}
+```
+
+Clients specify which accounts to subscribe to and can optionally filter event types. Events are scope-filtered: only events matching the token's granted `vrchat.pipeline.*` or `vrcsl.events.*` scopes are delivered.
 
 ---
 
@@ -179,6 +230,9 @@ Permissions follow a hierarchical dot notation: `vrchat.<category>.<action>`. Wi
 | `vrchat.invites.send` | Send invites. |
 | `vrchat.groups.*` | All group operations. |
 | `vrchat.notifications.*` | All notification operations. |
+| `vrchat.pipeline.*` | All real-time pipeline events (VRChat). |
+| `vrchat.pipeline.friend-online` | Friend online events only. |
+| `vrcsl.events.*` | All VRCSL internal events (session, account, token). |
 | `vrchat.*` | Full unrestricted access (triggers a warning in the consent dialog). |
 
 For the complete scope-to-endpoint mapping, see the [Project Design Record](pdr/VRCSECURELOGIN_V1_PDR.md).
@@ -211,7 +265,8 @@ To integrate your application or website with VRCSL:
 1. Send a `POST /register` request (HTTP) or a `register` message (WebSocket) with your application name, description, and desired scopes.
 2. VRCSL displays a consent dialog to the user. If approved, you receive an access token, a refresh token, and the list of granted scopes and accounts.
 3. Use the access token in the `Authorization: Bearer` header to proxy VRChat API requests through `POST /api`.
-4. When the access token expires, use `POST /refresh` with your refresh token to obtain new tokens.
+4. To receive real-time events, subscribe via WebSocket (`subscribe` message) or connect to `GET /events` (SSE). Include pipeline scopes in your registration request.
+5. When the access token expires, use `POST /refresh` with your refresh token to obtain new tokens.
 
 ### Quick Example (HTTP)
 
