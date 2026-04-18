@@ -2,6 +2,10 @@
   "name": "vrcsl",
   "version": "0.1.0",
   "main": "./out/main/index.js",
+  "author": {
+    "name": "Kıraç Armağan Önal",
+    "email": "kiracarmaganonal@gmail.com"
+  },
   "scripts": {
     "format": "prettier --plugin prettier-plugin-svelte --write .",
     "lint": "eslint --cache .",
