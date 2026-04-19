@@ -280,14 +280,18 @@ export class WSTransport implements Transport, EventTransport {
   async register(params: {
     appName: string;
     appDescription?: string;
+    appImage?: string;
     scopes: string[];
+    maxAccounts?: number;
     origin?: string;
     token?: string;
   }): Promise<RegisterResult> {
     return this.send<RegisterResult>("register", {
       appName: params.appName,
       appDescription: params.appDescription,
+      appImage: params.appImage,
       scopes: params.scopes,
+      ...(params.maxAccounts ? { maxAccounts: params.maxAccounts } : {}),
       ...(params.origin ? { origin: params.origin } : {}),
     });
   }

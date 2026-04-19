@@ -19,12 +19,27 @@
   let selectedAccounts = $state<string[]>([]);
   let responding = $state(false);
   let scopeDescriptions = $state<Record<string, string>>({});
+  let imageError = $state(false);
+
+  // maxAccounts: 0 = unlimited, >0 = limit
+  const maxAccounts = $derived(request?.maxAccounts ?? 0);
+  const accountLimitReached = $derived(
+    maxAccounts > 0 && selectedAccounts.length >= maxAccounts,
+  );
 
   // Sync selected scopes/accounts when a new request comes in
   $effect(() => {
     if (request) {
       selectedScopes = [...request.requestedScopes];
-      selectedAccounts = request.accounts.map((a) => a.id);
+      imageError = false;
+      // If maxAccounts is set, pre-select up to that limit; otherwise select all
+      if (request.maxAccounts > 0) {
+        selectedAccounts = request.accounts
+          .slice(0, request.maxAccounts)
+          .map((a) => a.id);
+      } else {
+        selectedAccounts = request.accounts.map((a) => a.id);
+      }
       // Fetch scope descriptions (spread to plain array to avoid IPC cloning issues with reactive proxies)
       window.vrcsl
         .getScopeDescriptions([...request.requestedScopes])
@@ -51,6 +66,8 @@
     if (selectedAccounts.includes(id)) {
       selectedAccounts = selectedAccounts.filter((a) => a !== id);
     } else {
+      // Enforce maxAccounts limit
+      if (maxAccounts > 0 && selectedAccounts.length >= maxAccounts) return;
       selectedAccounts = [...selectedAccounts, id];
     }
   }
@@ -73,6 +90,13 @@
     await respondToConsent(request.requestId, false, [], []);
     responding = false;
   }
+
+  function isValidImageSrc(src: string | null | undefined): boolean {
+    if (!src) return false;
+    if (src.startsWith("data:image/")) return true;
+    if (src.startsWith("https://")) return true;
+    return false;
+  }
 </script>
 
 <AlertDialog.Root
@@ -85,11 +109,23 @@
     {#if request}
       <AlertDialog.Header>
         <div class="flex items-center gap-3">
-          <div
-            class="flex items-center justify-center w-10 h-10 rounded-full bg-muted"
-          >
-            <ShieldAlert class="h-5 w-5 text-primary" />
-          </div>
+          {#if request.appImage && isValidImageSrc(request.appImage) && !imageError}
+            <img
+              src={request.appImage}
+              alt="{request.appName} icon"
+              class="w-10 h-10 rounded-full object-cover"
+              referrerpolicy="no-referrer"
+              onerror={() => {
+                imageError = true;
+              }}
+            />
+          {:else}
+            <div
+              class="flex items-center justify-center w-10 h-10 rounded-full bg-muted"
+            >
+              <ShieldAlert class="h-5 w-5 text-primary" />
+            </div>
+          {/if}
           <div>
             <AlertDialog.Title>App Permission Request</AlertDialog.Title>
             <AlertDialog.Description class="text-sm text-muted-foreground">
@@ -145,13 +181,27 @@
       <Separator class="my-3" />
 
       <div class="w-full">
-        <p class="text-sm font-medium mb-2">Grant Access To</p>
+        <div class="flex items-center gap-2 mb-2">
+          <p class="text-sm font-medium">Grant Access To</p>
+          {#if maxAccounts > 0}
+            <Badge variant="secondary">max {maxAccounts}</Badge>
+          {/if}
+        </div>
+        {#if maxAccounts > 0}
+          <p class="text-xs text-muted-foreground mb-2">
+            This app requests access to {maxAccounts === 1
+              ? "only 1 account"
+              : `up to ${maxAccounts} accounts`}.
+          </p>
+        {/if}
         <div class="flex flex-col gap-2">
           {#each request.accounts as account}
             <label class="flex items-center gap-2 cursor-pointer">
               <Checkbox
                 checked={selectedAccounts.includes(account.id)}
                 onCheckedChange={() => toggleAccount(account.id)}
+                disabled={!selectedAccounts.includes(account.id) &&
+                  accountLimitReached}
               />
               <span class="text-sm">{account.displayName}</span>
             </label>

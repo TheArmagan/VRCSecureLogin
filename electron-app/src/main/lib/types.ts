@@ -88,7 +88,9 @@ export interface ConsentRequest {
   requestId: string
   appName: string
   appDescription: string
+  appImage: string | null
   requestedScopes: string[]
+  maxAccounts: number
   processPath: string | null
   signatureStatus: string | null
   origin: string | null
@@ -107,7 +109,9 @@ export interface ConsentResponse {
 export interface RegisterRequest {
   appName: string
   appDescription?: string
+  appImage?: string
   scopes: string[]
+  maxAccounts?: number
   callbackUrl?: string
   origin?: string
 }

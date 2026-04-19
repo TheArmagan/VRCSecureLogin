@@ -10,7 +10,9 @@ interface ConsentRequest {
   requestId: string
   appName: string
   appDescription: string
+  appImage: string | null
   requestedScopes: string[]
+  maxAccounts: number
   processPath: string | null
   signatureStatus: string
   origin: string | null

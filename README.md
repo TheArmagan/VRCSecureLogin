@@ -65,7 +65,8 @@ VRChat does not offer a standard OAuth 2.0 system. Every third-party application
 - **Multi-account support** with simultaneous session management.
 - **Automatic session keep-alive** with silent cookie/token refresh.
 - **Scoped API proxy** that maps VRChat API endpoints to granular permission scopes.
-- **User consent dialogs** that show the requesting application's identity, process path, code signature, and requested permissions before granting access.
+- **User consent dialogs** that show the requesting application's identity, icon, process path, code signature, and requested permissions before granting access.
+- **Account selection limits** allowing apps to specify a maximum number of accounts they need (e.g., single-account tools).
 - **Process verification** that binds tokens to specific executables by inspecting PID, file path, and code signature.
 - **Short-lived tokens** (1-hour access, 30-day refresh) with automatic rotation.
 - **Per-token rate limiting** to prevent abuse from rogue applications.
@@ -328,7 +329,9 @@ import { VRCSLClient, Scopes } from "vrcsl.js";
 const client = new VRCSLClient({
   appName: "My VRChat Tool",
   appDescription: "Manages avatars across accounts",
+  appImage: "https://example.com/my-app-icon.png",
   scopes: [Scopes.AVATARS_ALL, Scopes.USERS_GET],
+  maxAccounts: 1,
 });
 
 // Connect (attempts WebSocket first, falls back to HTTP).
@@ -388,7 +391,9 @@ curl -X POST http://127.0.0.1:7642/register \
   -d '{
     "appName": "My VRChat Tool",
     "appDescription": "Manages avatars across accounts",
-    "scopes": ["vrchat.avatars.*", "vrchat.users.get"]
+    "appImage": "https://example.com/my-app-icon.png",
+    "scopes": ["vrchat.avatars.*", "vrchat.users.get"],
+    "maxAccounts": 1
   }'
 ```
 

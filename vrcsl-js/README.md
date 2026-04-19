@@ -87,7 +87,9 @@ import { VRCSLClient, Scopes } from "vrcsl.js";
 const client = new VRCSLClient({
   appName: "My VRChat Tool",
   appDescription: "Manages avatars across accounts",
+  appImage: "https://example.com/my-app-icon.png",
   scopes: [Scopes.AVATARS_ALL, Scopes.USERS_GET],
+  maxAccounts: 1,
 });
 
 await client.connect();
@@ -145,10 +147,12 @@ const client = new VRCSLClient(options: VRCSLClientOptions);
 |--------|------|---------|-------------|
 | `appName` | `string` | *required* | Display name shown in the VRCSL consent dialog. |
 | `appDescription` | `string` | `undefined` | Description shown in the consent dialog. |
+| `appImage` | `string` | `undefined` | Image URL (`https://`) or base64 data URI (`data:image/...`) displayed in the consent dialog. |
 | `port` | `number` | `7642` | VRCSL API port. |
 | `host` | `string` | `"127.0.0.1"` | VRCSL API host. |
 | `transport` | `"auto" \| "http" \| "ws"` | `"auto"` | Transport mode. `"auto"` attempts WebSocket first, falls back to HTTP. |
 | `scopes` | `string[]` | `undefined` | Scopes to request during registration. |
+| `maxAccounts` | `number` | `0` | Maximum number of accounts the user can grant. `0` means unlimited. |
 | `token` | `string` | `undefined` | Pre-existing access token (skip registration). |
 | `refreshToken` | `string` | `undefined` | Pre-existing refresh token. |
 | `tokenStore` | `TokenStore \| false` | *auto-detected* | Token persistence adapter. `false` disables persistence. |

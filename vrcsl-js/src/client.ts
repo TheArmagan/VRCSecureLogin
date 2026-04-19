@@ -26,10 +26,12 @@ const REFRESH_TOKEN_KEY = "vrcsl_refresh_token";
 export interface VRCSLClientOptions {
   appName: string;
   appDescription?: string;
+  appImage?: string;
   port?: number;
   host?: string;
   transport?: "auto" | "http" | "ws";
   scopes?: string[];
+  maxAccounts?: number;
   token?: string;
   refreshToken?: string;
   tokenStore?: TokenStore | false;
@@ -51,8 +53,10 @@ export class VRCSLClient extends EventEmitter {
     >
   > & {
     appDescription?: string;
+    appImage?: string;
     transportMode: "auto" | "http" | "ws";
     scopes: string[];
+    maxAccounts: number;
   };
 
   private log: Logger;
@@ -78,10 +82,12 @@ export class VRCSLClient extends EventEmitter {
     this.opts = {
       appName: options.appName,
       appDescription: options.appDescription,
+      appImage: options.appImage,
       port: options.port ?? 7642,
       host: options.host ?? "127.0.0.1",
       transportMode: options.transport ?? "auto",
       scopes: options.scopes ?? [],
+      maxAccounts: options.maxAccounts ?? 0,
       reconnectInterval: options.reconnectInterval ?? 5000,
       maxReconnectAttempts: options.maxReconnectAttempts ?? 10,
       connectionTimeout: options.connectionTimeout ?? 3000,
@@ -270,7 +276,9 @@ export class VRCSLClient extends EventEmitter {
     const params = {
       appName: this.opts.appName,
       appDescription: this.opts.appDescription,
+      appImage: this.opts.appImage,
       scopes,
+      maxAccounts: this.opts.maxAccounts,
       origin,
     };
 

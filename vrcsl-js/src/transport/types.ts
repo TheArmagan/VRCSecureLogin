@@ -23,7 +23,9 @@ export interface Transport {
   register(params: {
     appName: string;
     appDescription?: string;
+    appImage?: string;
     scopes: string[];
+    maxAccounts?: number;
     origin?: string;
     token?: string;
   }): Promise<RegisterResult>;
