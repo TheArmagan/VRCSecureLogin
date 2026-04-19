@@ -232,8 +232,8 @@ async function handleJoinWorld(params: Record<string, string>): Promise<void> {
     account.authCookie,
     account.twoFactorAuthCookie,
     'POST',
-    `/invite/myself`,
-    { worldId, instanceId: instanceId ?? '' }
+    `/invite/myself/to/${worldId}${instanceId ? `:${instanceId}` : ''}`,
+    {}
   )
 
   if (apiResult.status === 200) {
