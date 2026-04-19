@@ -21,6 +21,7 @@ function createWindow(): BrowserWindow {
     minHeight: 500,
     show: false,
     frame: false,
+    resizable: false,
     autoHideMenuBar: true,
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
