@@ -52,3 +52,18 @@ export interface EventPayload {
   timestamp: string;
   data: unknown;
 }
+
+/** Fetch adapter signature used by the official `vrchat` npm package. */
+export type VRChatFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
+/**
+ * Generic configuration shape accepted by `new vrchat.Configuration(...)`.
+ *
+ * Keep this intentionally structural so users don't need to import runtime types from
+ * this SDK just to pass the object into the vrchat package.
+ */
+export interface VRChatPackageConfig {
+  basePath: string;
+  fetchApi: VRChatFetch;
+  [key: string]: unknown;
+}

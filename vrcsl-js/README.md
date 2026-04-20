@@ -15,6 +15,7 @@ Official client SDK for [VRCSecureLogin](https://github.com/TheArmagan/VRCSecure
 - [Token Management](#token-management)
 - [API Proxy](#api-proxy)
 - [Batch API](#batch-api)
+- [VRChat Package Compatibility](#vrchat-package-compatibility)
 - [Event System](#event-system)
 - [DeepLink Helpers](#deeplink-helpers)
 - [Scope Constants](#scope-constants)
@@ -363,6 +364,83 @@ for (const res of results) {
 |-----------|-----------|-----------|
 | HTTP | `POST /api` | `POST /api/batch` |
 | WebSocket | `api_request` message with `requestId` | Multiple `api_request` messages, correlated by `requestId` |
+
+---
+
+## VRChat Package Compatibility
+
+You can use the official `vrchat` npm package through VRCSL without storing VRChat credentials in your app.
+
+`vrcsl.js` provides:
+
+- `client.createVRChatFetch(userId)` -> a fetch adapter for custom/advanced integrations
+- `client.createVRChatConfig(userId, options?)` -> a ready-to-use config object
+- `client.vrchat(userIdOrIndex?)` -> a cached, original `VRChat` client instance
+- `client.accounts` -> cached account list from `register()` and `getAccounts()`
+
+### Direct `VRChat` Client (Recommended)
+
+```typescript
+import { VRCSLClient, Scopes } from "vrcsl.js";
+
+const client = new VRCSLClient({
+  appName: "My Tool",
+  scopes: [Scopes.USERS_GET],
+});
+
+await client.connect();
+const registration = await client.register();
+
+// Pick one of the granted accounts for API calls.
+const userId = registration.grantedAccounts[0].userId;
+
+// Returns the ORIGINAL VRChat client from the `vrchat` package.
+const vrchat = await client.vrchat(userId);
+
+// Use normal vrchat client methods directly.
+// (Example method names/params depend on your vrchat package version.)
+const me = await vrchat.getCurrentUser();
+console.log(me.displayName);
+```
+
+### Notes
+
+- `client.vrchat(...)` returns the original typed `VRChat` client (not a wrapper object).
+- Repeated calls for the same account return the same cached instance.
+- `client.vrchat(0)` uses account index from `client.accounts`; `client.vrchat("usr_xxx")` uses explicit userId.
+- Supported HTTP methods for the adapter are `GET`, `POST`, `PUT`, and `DELETE`.
+- Request bodies must be JSON-compatible.
+- The adapter forwards request paths (including query strings) through VRCSL `client.api(...)`.
+
+### Legacy Adapter Helpers
+
+If you need low-level integration, these helpers are still available:
+
+- `client.createVRChatFetch(userId)`
+- `client.createVRChatConfig(userId, options?)`
+
+### Direct VRChat Client
+
+```typescript
+import { VRCSLClient } from "vrcsl.js";
+
+const client = new VRCSLClient({ appName: "My Tool" });
+
+await client.connect();
+await client.register();
+
+// Accounts are cached and always available.
+console.log(client.accounts);
+
+// Get cached VRChat instance by account index.
+const vrchat0 = await client.vrchat(0);
+
+// Or by userId.
+const vrchatUser = await client.vrchat("usr_xxx");
+
+// Same account returns same cached VRChat instance.
+console.log(vrchat0 === vrchatUser);
+```
 
 ---
 
@@ -765,7 +843,7 @@ All public types are exported from the package entry point.
 ```typescript
 // Core
 export { VRCSLClient } from "./client";
-export type { VRCSLClientOptions } from "./client";
+export type { VRCSLClientOptions, VRChatBridgeOptions } from "./client";
 
 // Results
 export type {
@@ -777,6 +855,8 @@ export type {
   BatchResponse,
   SubscribeResult,
   EventPayload,
+  VRChatFetch,
+  VRChatPackageConfig,
 } from "./types";
 
 // Error

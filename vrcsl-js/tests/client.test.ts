@@ -310,4 +310,171 @@ describe("VRCSLClient", () => {
     expect(results).toHaveLength(2);
     expect(results[0].requestId).toBe("1");
   });
+
+  test("createVRChatFetch proxies request through /api", async () => {
+    let forwardedBody: unknown = null;
+
+    globalThis.fetch = mock(async (url: string, init?: RequestInit) => {
+      const targetUrl = typeof url === "string" ? url : "";
+
+      if (targetUrl.includes("/accounts")) {
+        return new Response(JSON.stringify({ accounts: [] }), { status: 200 });
+      }
+
+      if (targetUrl.includes("/api")) {
+        forwardedBody = JSON.parse(String(init?.body ?? "{}"));
+        return new Response(
+          JSON.stringify({ status: 200, data: { ok: true, source: "vrcsl" } }),
+          { status: 200 }
+        );
+      }
+
+      return new Response(JSON.stringify({ error: "not_found" }), { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const client = new VRCSLClient({
+      appName: "Test",
+      transport: "http",
+      token: "vrcsl_at_test",
+      tokenStore: false,
+    });
+
+    await client.connect();
+
+    const vrchatFetch = client.createVRChatFetch("usr_xxx");
+    const response = await vrchatFetch("https://api.vrchat.cloud/api/1/users/usr_yyy?foo=bar", {
+      method: "POST",
+      body: JSON.stringify({ ping: true }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true, source: "vrcsl" });
+    expect(forwardedBody).toEqual({
+      userId: "usr_xxx",
+      method: "POST",
+      path: "/api/1/users/usr_yyy?foo=bar",
+      body: { ping: true },
+    });
+  });
+
+  test("createVRChatConfig returns configuration-compatible object", async () => {
+    const client = new VRCSLClient({
+      appName: "Test",
+      tokenStore: false,
+    });
+
+    const config = client.createVRChatConfig("usr_xxx", {
+      extra: { userAgent: "My Tool" },
+    });
+
+    expect(config.basePath).toBe("https://api.vrchat.cloud/api/1");
+    expect(typeof config.fetchApi).toBe("function");
+    expect(config.userAgent).toBe("My Tool");
+  });
+
+  test("register caches granted accounts to client.accounts", async () => {
+    globalThis.fetch = mock(async () =>
+      new Response(
+        JSON.stringify({
+          token: "vrcsl_at_test",
+          refreshToken: "vrcsl_rt_test",
+          expiresIn: 3600,
+          grantedScopes: ["vrchat.users.get"],
+          grantedAccounts: [
+            { userId: "usr_a", displayName: "A" },
+            { userId: "usr_b", displayName: "B" },
+          ],
+        }),
+        { status: 200 }
+      )
+    ) as unknown as typeof fetch;
+
+    const client = new VRCSLClient({
+      appName: "Test",
+      transport: "http",
+      tokenStore: false,
+    });
+
+    await client.connect();
+    await client.register();
+
+    expect(client.accounts).toHaveLength(2);
+    expect(client.accounts[0].userId).toBe("usr_a");
+    expect(client.accounts[1].userId).toBe("usr_b");
+  });
+
+  test("getAccounts refreshes client.accounts cache", async () => {
+    globalThis.fetch = mock(async (url: string) => {
+      const targetUrl = typeof url === "string" ? url : "";
+
+      if (targetUrl.includes("/accounts")) {
+        return new Response(
+          JSON.stringify({
+            accounts: [{ userId: "usr_x", displayName: "X" }],
+          }),
+          { status: 200 }
+        );
+      }
+
+      return new Response(JSON.stringify({ error: "not_found" }), { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const client = new VRCSLClient({
+      appName: "Test",
+      transport: "http",
+      token: "vrcsl_at_test",
+      tokenStore: false,
+    });
+
+    await client.connect();
+    await client.getAccounts();
+
+    expect(client.accounts).toEqual([{ userId: "usr_x", displayName: "X" }]);
+  });
+
+  test("vrchat(account) caches sdk instance by account userId", async () => {
+    globalThis.fetch = mock(async (url: string) => {
+      const targetUrl = typeof url === "string" ? url : "";
+      if (targetUrl.includes("/accounts")) {
+        return new Response(
+          JSON.stringify({
+            accounts: [
+              { userId: "usr_a", displayName: "A" },
+              { userId: "usr_b", displayName: "B" },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+      return new Response(JSON.stringify({ error: "not_found" }), { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const client = new VRCSLClient({
+      appName: "Test",
+      transport: "http",
+      token: "vrcsl_at_test",
+      tokenStore: false,
+    });
+
+    const created: Array<{ userId: string }> = [];
+    (client as unknown as {
+      createVrchatClient: (userId: string) => Promise<{ userId: string }>;
+    }).createVrchatClient = async (userId: string) => {
+      const instance = { userId };
+      created.push(instance);
+      return instance;
+    };
+
+    await client.connect();
+    await client.getAccounts();
+
+    const byIndex = await client.vrchat(0);
+    const byUserId = await client.vrchat("usr_a");
+    const second = await client.vrchat(1);
+
+    expect(byIndex).toBe(byUserId);
+    expect((byIndex as unknown as { userId: string }).userId).toBe("usr_a");
+    expect((second as unknown as { userId: string }).userId).toBe("usr_b");
+    expect(created).toHaveLength(2);
+  });
 });

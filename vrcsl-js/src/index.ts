@@ -2,7 +2,7 @@
 
 // Core
 export { VRCSLClient } from "./client";
-export type { VRCSLClientOptions } from "./client";
+export type { VRCSLClientOptions, VRChatBridgeOptions } from "./client";
 
 // Results & types
 export type {
@@ -14,6 +14,8 @@ export type {
   BatchResponse,
   SubscribeResult,
   EventPayload,
+  VRChatFetch,
+  VRChatPackageConfig,
 } from "./types";
 
 // Error

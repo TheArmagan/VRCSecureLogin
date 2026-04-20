@@ -9,6 +9,7 @@ import { MemoryStore, getDefaultTokenStore } from "./token-store";
 import { HTTPTransport } from "./transport/http";
 import { WSTransport } from "./transport/ws";
 import { SSETransport } from "./transport/sse";
+import type { VRChat as VRChatClient, VRChatOptions } from "vrchat";
 import type {
   RegisterResult,
   RefreshResult,
@@ -18,6 +19,8 @@ import type {
   BatchResponse,
   SubscribeResult,
   EventPayload,
+  VRChatFetch,
+  VRChatPackageConfig,
 } from "./types";
 
 const TOKEN_KEY = "vrcsl_token";
@@ -41,6 +44,16 @@ export interface VRCSLClientOptions {
   requestTimeout?: number;
   logLevel?: LogLevel;
   logger?: Logger;
+}
+
+export interface VRChatBridgeOptions {
+  baseUrl?: string;
+  application?: {
+    name?: string;
+    version?: string;
+    contact?: string;
+  };
+  extra?: Record<string, unknown>;
 }
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "reconnecting";
@@ -75,6 +88,9 @@ export class VRCSLClient extends EventEmitter {
   private refreshLock: Promise<RefreshResult> | null = null;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private accountsCache: AccountInfo[] = [];
+  private vrchatClientCache = new Map<string, VRChatClient>();
 
   constructor(options: VRCSLClientOptions) {
     super();
@@ -127,6 +143,11 @@ export class VRCSLClient extends EventEmitter {
   /** Whether the client has a valid access token. */
   get isAuthenticated(): boolean {
     return this.accessToken !== null;
+  }
+
+  /** Cached accounts from register/getAccounts. */
+  get accounts(): AccountInfo[] {
+    return this.accountsCache;
   }
 
   /** Connect to VRCSL. Establishes WS or verifies HTTP connectivity. */
@@ -288,6 +309,7 @@ export class VRCSLClient extends EventEmitter {
     const result = await transport.register(params);
 
     await this.storeTokens(result.token, result.refreshToken);
+    this.setAccountsCache(result.grantedAccounts ?? []);
     this.log.info("Registration successful");
 
     return result;
@@ -333,10 +355,31 @@ export class VRCSLClient extends EventEmitter {
 
   /** List VRChat accounts this token has access to. */
   async getAccounts(): Promise<AccountInfo[]> {
-    return this.authenticatedRequest(() => {
+    return this.authenticatedRequest(async () => {
       const transport = this.getTransport();
-      return transport.getAccounts(this.accessToken!);
+      const accounts = await transport.getAccounts(this.accessToken!);
+      this.setAccountsCache(accounts);
+      return accounts;
     });
+  }
+
+  /**
+   * Return a cached `new VRChat(...)` instance that routes requests through VRCSL.
+   *
+   * - `account`: account `userId` or cached account index.
+   * - If omitted and exactly one account is cached, that account is used.
+   */
+  async vrchat(account?: string | number, options?: VRChatBridgeOptions): Promise<VRChatClient> {
+    const userId = this.resolveVrchatUserId(account);
+
+    const cached = this.vrchatClientCache.get(userId);
+    if (cached) {
+      return cached;
+    }
+
+    const instance = await this.createVrchatClient(userId, options);
+    this.vrchatClientCache.set(userId, instance);
+    return instance;
   }
 
   /** Proxy a single VRChat API request through VRCSL. */
@@ -358,6 +401,54 @@ export class VRCSLClient extends EventEmitter {
       const transport = this.getTransport();
       return transport.batch(this.accessToken!, requests);
     });
+  }
+
+  /**
+   * Create a fetch adapter that lets the `vrchat` npm package send requests via VRCSL.
+   *
+   * Pass the returned function as `fetchApi` in `new Configuration(...)`.
+   */
+  createVRChatFetch(userId: string): VRChatFetch {
+    return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const method = this.resolveRequestMethod(input, init);
+      const path = this.resolveRequestPath(input);
+      const body = await this.resolveRequestBody(input, init);
+
+      const result = await this.api(userId, method, path, body);
+
+      let responseBody: BodyInit | null = null;
+      let contentType = "application/json";
+
+      if (result.data !== null && result.data !== undefined) {
+        if (typeof result.data === "string") {
+          responseBody = result.data;
+          contentType = "text/plain; charset=utf-8";
+        } else {
+          responseBody = JSON.stringify(result.data);
+        }
+      }
+
+      return new Response(responseBody, {
+        status: result.status,
+        headers: {
+          "Content-Type": contentType,
+        },
+      });
+    };
+  }
+
+  /**
+   * Build a `vrchat` package `Configuration`-compatible object wired to this client.
+   */
+  createVRChatConfig(
+    userId: string,
+    options?: { basePath?: string; extra?: Record<string, unknown> }
+  ): VRChatPackageConfig {
+    return {
+      basePath: options?.basePath ?? "https://api.vrchat.cloud/api/1",
+      fetchApi: this.createVRChatFetch(userId),
+      ...(options?.extra ?? {}),
+    };
   }
 
   /** Subscribe to VRCSL pipeline events. */
@@ -453,6 +544,171 @@ export class VRCSLClient extends EventEmitter {
 
   private async wsAuthenticateToken(ws: WSTransport, token: string): Promise<void> {
     await ws.authenticate(token);
+  }
+
+  private setAccountsCache(accounts: AccountInfo[]): void {
+    this.accountsCache = [...accounts];
+
+    const validUserIds = new Set(this.accountsCache.map((account) => account.userId));
+    for (const userId of this.vrchatClientCache.keys()) {
+      if (!validUserIds.has(userId)) {
+        this.vrchatClientCache.delete(userId);
+      }
+    }
+  }
+
+  private resolveVrchatUserId(account?: string | number): string {
+    if (typeof account === "string" && account.length > 0) {
+      return account;
+    }
+
+    if (typeof account === "number") {
+      const selected = this.accountsCache[account];
+      if (!selected) {
+        throw new VRCSLError(
+          "invalid_request",
+          `Account index out of range: ${account}. Cached accounts: ${this.accountsCache.length}`
+        );
+      }
+      return selected.userId;
+    }
+
+    if (this.accountsCache.length === 1) {
+      return this.accountsCache[0].userId;
+    }
+
+    if (this.accountsCache.length === 0) {
+      throw new VRCSLError(
+        "invalid_request",
+        "No cached accounts found. Call register() or getAccounts(), or pass a userId to vrchat(...)."
+      );
+    }
+
+    throw new VRCSLError(
+      "invalid_request",
+      "Multiple cached accounts found. Pass a userId or account index to vrchat(...)."
+    );
+  }
+
+  private async createVrchatClient(userId: string, options?: VRChatBridgeOptions): Promise<VRChatClient> {
+    // Keep module resolution fully lazy so web bundles don't try to include `vrchat`
+    // unless `client.vrchat(...)` is actually executed.
+    const loadVrchat = new Function("m", "return import(m)") as (m: string) => Promise<unknown>;
+    const vrchatModule = await loadVrchat("vrchat") as { VRChat?: unknown };
+    const VRChatCtor = vrchatModule.VRChat as unknown as
+      | (new (opts: VRChatOptions) => VRChatClient)
+      | undefined;
+
+    if (!VRChatCtor) {
+      throw new VRCSLError("internal_error", "vrchat package does not export VRChat constructor");
+    }
+
+    const application = {
+      name: options?.application?.name ?? this.opts.appName,
+      version: options?.application?.version ?? "1.0.0",
+      contact: options?.application?.contact ?? "https://github.com/TheArmagan/VRCSecureLogin",
+    };
+
+    const vrchatOptions = {
+      baseUrl: options?.baseUrl ?? "https://api.vrchat.cloud/api/1",
+      application,
+      fetch: this.createVRChatFetch(userId),
+      ...(options?.extra ?? {}),
+    } as VRChatOptions;
+
+    return new VRChatCtor(vrchatOptions);
+  }
+
+  private resolveRequestMethod(input: RequestInfo | URL, init?: RequestInit): "GET" | "POST" | "PUT" | "DELETE" {
+    const method =
+      init?.method ??
+      (typeof Request !== "undefined" && input instanceof Request ? input.method : "GET");
+
+    const upper = method.toUpperCase();
+    if (upper === "GET" || upper === "POST" || upper === "PUT" || upper === "DELETE") {
+      return upper;
+    }
+    throw new VRCSLError("invalid_request", `Unsupported method for VRCSL proxy: ${upper}`);
+  }
+
+  private resolveRequestPath(input: RequestInfo | URL): string {
+    const rawUrl = this.resolveInputUrl(input);
+
+    try {
+      const parsed = new URL(rawUrl, "https://api.vrchat.cloud");
+      return `${parsed.pathname}${parsed.search}`;
+    } catch {
+      return rawUrl;
+    }
+  }
+
+  private resolveInputUrl(input: RequestInfo | URL): string {
+    if (typeof input === "string") {
+      return input;
+    }
+
+    if (input instanceof URL) {
+      return input.toString();
+    }
+
+    if (typeof Request !== "undefined" && input instanceof Request) {
+      return input.url;
+    }
+
+    return String(input);
+  }
+
+  private async resolveRequestBody(input: RequestInfo | URL, init?: RequestInit): Promise<unknown> {
+    if (init?.body !== undefined) {
+      return this.deserializeRequestBody(init.body);
+    }
+
+    if (typeof Request !== "undefined" && input instanceof Request) {
+      const text = await input.clone().text();
+      if (!text) {
+        return undefined;
+      }
+
+      try {
+        return JSON.parse(text);
+      } catch {
+        return text;
+      }
+    }
+
+    return undefined;
+  }
+
+  private deserializeRequestBody(body: BodyInit | null): unknown {
+    if (body === null) {
+      return null;
+    }
+
+    if (typeof body === "string") {
+      try {
+        return JSON.parse(body);
+      } catch {
+        return body;
+      }
+    }
+
+    if (typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams) {
+      return body.toString();
+    }
+
+    if (
+      (typeof FormData !== "undefined" && body instanceof FormData) ||
+      (typeof Blob !== "undefined" && body instanceof Blob) ||
+      body instanceof ArrayBuffer ||
+      ArrayBuffer.isView(body)
+    ) {
+      throw new VRCSLError(
+        "invalid_request",
+        "Unsupported request body type for VRCSL proxy. Use JSON-compatible bodies."
+      );
+    }
+
+    return body;
   }
 
   /** Execute an authenticated request with auto-refresh on 401. */
